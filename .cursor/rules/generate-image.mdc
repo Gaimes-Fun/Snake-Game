@@ -1,0 +1,7 @@
+---
+description: When you want to generate image
+globs: ui/public/images/**/*
+---
+# GENERATE IMAGE
+1. You create a prompt to generate image
+2. Run command to terminal "maga-ai generate --image <prompt> --size <width> <height> --output <path>"

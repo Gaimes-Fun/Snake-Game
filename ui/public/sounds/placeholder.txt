@@ -1,0 +1,3 @@
+Create the following sound files in this directory:
+- eat.mp3 (sound effect for eating food)
+- death.mp3 (sound effect for snake death) 

@@ -1,0 +1,9 @@
+---
+description: Global rule for project
+globs: *,**/*
+---
+# CORE:
+- Use TypeScript for type safety
+  
+# UI:
+- DO NOT change logic in file ui/index.html and ui/src/main.tsx

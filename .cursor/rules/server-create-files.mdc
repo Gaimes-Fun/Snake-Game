@@ -1,0 +1,10 @@
+---
+description: Enforce server project structure standards when creating or updating files
+globs: server/src/*
+---
+# The project structure:
+  - `src/types`: TypeScript definitions.
+  - `src/utils`: Utility functions.
+  - `src/rooms`: Define Room.
+  - `src/rooms/schema`: Define Schema of Room.
+  - `src/services`: Service logic

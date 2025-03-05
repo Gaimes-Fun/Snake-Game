@@ -1,0 +1,6 @@
+---
+description: Activate rule when update server logic
+globs: server/src/**/*
+---
+# Server:
+- API path with prefix 'api'

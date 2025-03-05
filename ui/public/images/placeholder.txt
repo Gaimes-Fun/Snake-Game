@@ -1,0 +1,7 @@
+Create the following image files in this directory:
+- bg.png (background texture)
+- snake-head.png (snake head sprite)
+- snake-body.png (snake body segment sprite)
+- food.png (regular food sprite)
+- special-food.png (special food sprite)
+- button.png (button background - optional) 

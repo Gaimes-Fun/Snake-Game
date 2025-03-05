@@ -1,0 +1,10 @@
+---
+description: Activate rule when update UI logic
+globs: ui/src/**/*
+---
+# UI:
+- DO NOT change the logic in ui/index.html and ui/src/main.tsx.
+- DO NOT use React components or hooks.
+- Use Linear Interpolation when moving the camera and player positions.
+- DO NOT use the room state to constantly update the player’s position.
+- Alway use VITE_API_URL and VITE_COLYSEUS_SERVER_URL 
