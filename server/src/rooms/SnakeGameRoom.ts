@@ -1,5 +1,5 @@
 import { Room, Client, Delayed } from "@colyseus/core";
-import { SnakeGameState, Player, Food, Vector2 } from "./schema/SnakeGameState";
+import { SnakeGameState, Player, Food, Vector2, SnakeSegment } from "./schema/SnakeGameState";
 
 export class SnakeGameRoom extends Room<SnakeGameState> {
     maxClients = 50;
@@ -228,9 +228,7 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
         // Initialize snake with 5 segments
         const initialSegments = 5;
         for (let i = 0; i < initialSegments; i++) {
-            player.segments.push({
-                position: new Vector2(spawnPosition.x - i * 20, spawnPosition.y)
-            });
+            player.segments.push(new SnakeSegment(spawnPosition.x - i * 20, spawnPosition.y));
         }
     }
 

@@ -13,6 +13,7 @@ const phasermsg = () => {
             process.stdout.write(`${line}\n${msg}\n${line}\n`);
 
             process.stdout.write(`✨ Done ✨\n`);
+            process.exit(0);
         }
     }
 }

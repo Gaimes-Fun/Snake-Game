@@ -1,4 +1,4 @@
-import { Schema, Context, type, MapSchema, ArraySchema } from "@colyseus/schema";
+import { Schema, type, MapSchema, ArraySchema } from "@colyseus/schema";
 
 // Simple position class without Schema inheritance to reduce overhead
 export class Vector2 extends Schema {
