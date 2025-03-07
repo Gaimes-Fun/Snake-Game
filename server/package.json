@@ -14,7 +14,7 @@
     "clean": "rimraf build",
     "test": "mocha -r tsx test/**_test.ts --exit --timeout 15000"
   },
-  "author": "maga.ai",
+  "author": "gaimes.fun",
   "devDependencies": {
     "@colyseus/loadtest": "^0.16.0",
     "@colyseus/testing": "^0.16.0",

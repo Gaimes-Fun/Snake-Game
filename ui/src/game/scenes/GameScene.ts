@@ -63,6 +63,9 @@ export class GameScene extends Scene {
     // Add this property to the class
     private backgroundMusic: Phaser.Sound.BaseSound;
     
+    // Add this property to the class
+    private playerRankText: Phaser.GameObjects.Text;
+    
     constructor() {
         super({
             key: 'GameScene',
@@ -179,6 +182,9 @@ export class GameScene extends Scene {
             if (player.boosting) {
                 this.updateBoostEffect(head.position.x, head.position.y, angleDeg);
             }
+            
+            // Apply food attraction logic
+            this.attractFoodInFront(head.position.x, head.position.y, angleDeg);
         }
         
         // Update minimap
@@ -304,8 +310,17 @@ export class GameScene extends Scene {
             strokeThickness: 4
         }).setScrollFactor(0);
         
-        // FPS counter
-        this.fpsText = this.add.text(20, 60, 'FPS: 0', {
+        // Add player rank text
+        this.playerRankText = this.add.text(20, 60, 'Rank: -', {
+            fontFamily: 'Arial',
+            fontSize: '24px',
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 4
+        }).setScrollFactor(0);
+        
+        // FPS counter - move down to accommodate rank text
+        this.fpsText = this.add.text(20, 100, 'FPS: 0', {
             fontFamily: 'Arial',
             fontSize: '16px',
             color: '#00ff00',
@@ -313,8 +328,8 @@ export class GameScene extends Scene {
             strokeThickness: 3
         }).setScrollFactor(0);
         
-        // Add player count text
-        this.playerCountText = this.add.text(20, 100, 'Players: 0', {
+        // Add player count text - move down to accommodate rank text
+        this.playerCountText = this.add.text(20, 140, 'Players: 0', {
             fontFamily: 'Arial',
             fontSize: '16px',
             color: '#ffffff',
@@ -614,11 +629,12 @@ export class GameScene extends Scene {
                 // Create player name text
                 const nameText = this.add.text(0, 0, playerData.name, {
                     fontFamily: 'Arial',
-                    fontSize: '14px',
+                    fontSize: '18px',
                     color: '#ffffff',
                     stroke: '#000000',
-                    strokeThickness: 3
+                    strokeThickness: 4
                 }).setOrigin(0.5, 0.5);
+                nameText.setDepth(100);
                 this.playerTexts.set(id, nameText);
             }
             
@@ -647,6 +663,9 @@ export class GameScene extends Scene {
                     if (isHead) {
                         newSegment.setOrigin(0.5, 0.5);
                     }
+                    
+                    // Set appropriate depths for snake segments
+                    newSegment.setDepth(isHead ? 20 : 10);
                 }
             } else if (currentSegmentCount > segments.length) {
                 // Remove extra segments if snake has shrunk
@@ -655,6 +674,10 @@ export class GameScene extends Scene {
                     children[i].destroy();
                 }
             }
+            
+            // Calculate base scale based on score - larger snakes for higher scores
+            // Make it grow faster with a more aggressive formula
+            const baseScale = Math.min(2.0, 1 + (playerData.score / 50));
             
             // Update all segment positions
             for (let i = 0; i < segments.length; i++) {
@@ -681,6 +704,12 @@ export class GameScene extends Scene {
                     
                     // Update position
                     segmentObj.setPosition(newX, newY);
+                    
+                    // Apply scale based on position in snake (head is largest)
+                    const isHead = i === 0;
+                    // Make the scaling more dramatic along the body
+                    const segmentScale = isHead ? baseScale : baseScale * Math.max(0.6, 1 - (i * 0.02));
+                    segmentObj.setScale(segmentScale);
                 }
             }
             
@@ -692,10 +721,10 @@ export class GameScene extends Scene {
                 // Add visual effect for boosting
                 if (playerData.boosting) {
                     head.setAlpha(0.8 + Math.sin(this.time.now * 0.01) * 0.2); // Pulsing effect
-                    head.setScale(1.2); // Make head slightly larger when boosting
+                    head.setScale(baseScale * 1.2); // Make head slightly larger when boosting
                 } else {
                     head.setAlpha(1);
-                    head.setScale(1);
+                    head.setScale(baseScale);
                 }
             }
         });
@@ -737,6 +766,7 @@ export class GameScene extends Scene {
                 // Update existing food sprite
                 const foodSprite = this.foods.get(foodId);
                 if (foodSprite) {
+                    // Apply the server position
                     foodSprite.setPosition(position.x, position.y);
                     
                     // Update texture if value changed
@@ -794,6 +824,22 @@ export class GameScene extends Scene {
         
         // Update player count
         this.playerCountText.setText(`Players: ${players.length}`);
+        
+        // Find current player's rank
+        let playerRank = -1;
+        for (let i = 0; i < sortedPlayers.length; i++) {
+            if (sortedPlayers[i].id === this.playerId) {
+                playerRank = i + 1;
+                break;
+            }
+        }
+        
+        // Update player rank text
+        if (playerRank > 0) {
+            this.playerRankText.setText(`Rank: ${playerRank}/${players.length}`);
+        } else {
+            this.playerRankText.setText('Rank: -');
+        }
         
         // Update leaderboard entries
         for (let i = 0; i < 5; i++) {
@@ -859,7 +905,7 @@ export class GameScene extends Scene {
         }
         
         // Draw food items (small dots) - Use the local foods Map instead of gameState.foods
-        this.minimap.lineStyle(0);
+        this.minimap.lineStyle(0, 0x000000, 0); // Add color and alpha parameters
         this.foods.forEach((foodSprite, foodId) => {
             if (!foodSprite) return;
             
@@ -950,12 +996,28 @@ export class GameScene extends Scene {
         this.respawnButton.setVisible(true);
         this.menuButton.setVisible(true);
         
-        // Update score on death screen
+        // Update score and rank on death screen
         const player = this.gameState.players.get(this.playerId);
         if (player) {
             const scoreText = this.deathOverlay.getByName('scoreText') as Phaser.GameObjects.Text;
             if (scoreText) {
-                scoreText.setText(`Score: ${player.score}`);
+                // Get player rank
+                let playerRank = -1;
+                const players: any[] = [];
+                this.gameState.players.forEach((p: any) => {
+                    if (p.score > 0) players.push(p);
+                });
+                
+                const sortedPlayers = players.sort((a, b) => b.score - a.score);
+                for (let i = 0; i < sortedPlayers.length; i++) {
+                    if (sortedPlayers[i].id === this.playerId) {
+                        playerRank = i + 1;
+                        break;
+                    }
+                }
+                
+                // Show score and rank
+                scoreText.setText(`Score: ${player.score}\nRank: ${playerRank > 0 ? playerRank : '-'}/${players.length}`);
             }
         }
         
@@ -1012,7 +1074,7 @@ export class GameScene extends Scene {
                     
                     // Target position (above the head)
                     const targetX = head.position.x;
-                    const targetY = head.position.y - 30;
+                    const targetY = head.position.y - 40;
                     
                     // Calculate interpolated position
                     const newX = currentX + (targetX - currentX) * lerpFactor;
@@ -1020,6 +1082,10 @@ export class GameScene extends Scene {
                     
                     // Update position
                     text.setPosition(newX, newY);
+                    
+                    // Scale text based on player score - similar to snake scaling
+                    const baseScale = Math.min(1.5, 1 + (player.score / 100));
+                    text.setScale(baseScale);
                 }
             }
         });
@@ -1055,7 +1121,140 @@ export class GameScene extends Scene {
             this.backgroundMusic.stop();
         }
         
-        // Call the parent shutdown method
+        // Call the parent shutdown method instead of destroy
         super.shutdown();
+    }
+    
+    // Add this new method to attract food in front of the snake
+    private attractFoodInFront(headX: number, headY: number, angleDeg: number) {
+        if (!this.gameState || !this.foods) return;
+        
+        const player = this.gameState.players.get(this.playerId);
+        if (!player || !player.alive) return;
+        
+        // Convert angle to radians
+        const angleRad = Phaser.Math.DegToRad(angleDeg);
+        
+        // Define the attraction parameters
+        const attractionDistance = 200; // Tăng khoảng cách hút lên
+        const attractionConeAngle = Math.PI / 2.5; // Mở rộng góc hút (khoảng 72 độ)
+        const attractionStrength = 5; // Tăng lực hút lên đáng kể
+        const eatDistance = 30; // Khoảng cách để tự động ăn thức ăn
+        
+        // Check each food item
+        this.foods.forEach((foodSprite, foodId) => {
+            // Calculate distance and angle to food
+            const dx = foodSprite.x - headX;
+            const dy = foodSprite.y - headY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            // Skip if too far away
+            if (distance > attractionDistance) return;
+            
+            // Calculate angle to food
+            const foodAngle = Math.atan2(dy, dx);
+            
+            // Calculate angle difference (accounting for wrapping)
+            let angleDiff = Math.abs(foodAngle - angleRad);
+            if (angleDiff > Math.PI) {
+                angleDiff = 2 * Math.PI - angleDiff;
+            }
+            
+            // Check if food is within the attraction cone
+            if (angleDiff <= attractionConeAngle / 2) {
+                // Calculate attraction force (stronger when closer and more aligned)
+                const alignmentFactor = 1 - (angleDiff / (attractionConeAngle / 2));
+                const distanceFactor = 1 - (distance / attractionDistance);
+                const attractionForce = attractionStrength * alignmentFactor * distanceFactor;
+                
+                // Calculate movement vector toward the snake head
+                const moveX = (headX - foodSprite.x) * attractionForce * 0.1; // Tăng hệ số lên gấp đôi
+                const moveY = (headY - foodSprite.y) * attractionForce * 0.1; // Tăng hệ số lên gấp đôi
+                
+                // Apply movement (only visually on the client side)
+                foodSprite.x += moveX;
+                foodSprite.y += moveY;
+                
+                // Check if food is close enough to be eaten
+                const newDistance = Phaser.Math.Distance.Between(headX, headY, foodSprite.x, foodSprite.y);
+                if (newDistance < eatDistance) {
+                    // Visually "eat" the food immediately
+                    foodSprite.setVisible(false);
+                    foodSprite.setScale(0);
+                    
+                    // Play eat sound
+                    this.eatSound.play({ volume: 0.5 });
+                    
+                    // Add a visual effect at the position
+                    this.addEatEffect(foodSprite.x, foodSprite.y);
+                    
+                    // Send message to server that food was eaten, including current positions
+                    console.log(`Sending eatFood message for food ${foodId}, distance: ${newDistance}`);
+                    this.room.send('eatFood', { 
+                        foodId: foodId,
+                        headX: headX,
+                        headY: headY,
+                        foodX: foodSprite.x,
+                        foodY: foodSprite.y
+                    });
+                }
+                
+                // Add a subtle visual effect to show attraction
+                if (!foodSprite.data || !foodSprite.data.get('isAttracting')) {
+                    foodSprite.setData('isAttracting', true);
+                    
+                    // Add a more noticeable pulsing effect
+                    this.tweens.add({
+                        targets: foodSprite,
+                        alpha: { from: 1, to: 0.7 },
+                        scale: { from: 1, to: 1.5 }, // Tăng hiệu ứng phóng to
+                        duration: 200, // Giảm thời gian để hiệu ứng nhanh hơn
+                        yoyo: true,
+                        repeat: -1,
+                        ease: 'Sine.easeInOut'
+                    });
+                }
+            } else {
+                // Reset visual effect if food is no longer being attracted
+                if (foodSprite.data && foodSprite.data.get('isAttracting')) {
+                    foodSprite.setData('isAttracting', false);
+                    
+                    // Stop any existing tweens
+                    this.tweens.killTweensOf(foodSprite);
+                    
+                    // Reset to normal appearance
+                    foodSprite.setAlpha(1);
+                    foodSprite.setScale(1);
+                    
+                    // Restart the normal scale animation
+                    this.tweens.add({
+                        targets: foodSprite,
+                        scale: { from: 0.8, to: 1.2 },
+                        duration: 1000,
+                        yoyo: true,
+                        repeat: -1,
+                        ease: 'Sine.easeInOut'
+                    });
+                }
+            }
+        });
+    }
+    
+    // Thêm phương thức mới để tạo hiệu ứng khi ăn thức ăn
+    private addEatEffect(x: number, y: number) {
+        // Tạo hiệu ứng particle khi ăn thức ăn
+        const particles = this.add.particles(x, y, 'food', {
+            speed: { min: 50, max: 150 },
+            scale: { start: 0.6, end: 0 },
+            alpha: { start: 1, end: 0 },
+            lifespan: 300,
+            quantity: 5,
+            blendMode: 'ADD'
+        });
+        
+        // Tự động hủy sau khi hoàn thành
+        this.time.delayedCall(300, () => {
+            particles.destroy();
+        });
     }
 } 

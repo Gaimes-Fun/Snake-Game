@@ -50,6 +50,65 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
             this.respawnPlayer(client);
         });
         
+        // Add handler for eatFood message
+        this.onMessage("eatFood", (client, message: { foodId: string }) => {
+            console.log(`Player ${client.sessionId} attempting to eat food ${message.foodId}`);
+            
+            const player = this.state.players.get(client.sessionId);
+            const food = this.state.foods.get(message.foodId);
+            
+            // Verify that both player and food exist
+            if (!player || !player.alive) {
+                console.log(`Player ${client.sessionId} is not valid or not alive`);
+                return;
+            }
+            
+            if (!food) {
+                console.log(`Food ${message.foodId} does not exist`);
+                return;
+            }
+            
+            // Do a basic distance check with a very generous limit
+            const head = player.head;
+            const dx = head.x - food.position.x;
+            const dy = head.y - food.position.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            console.log(`Distance to food: ${distance}`);
+            
+            // Allow a very generous distance for client-side attraction
+            const maxDistance = 250; // Very generous limit
+            
+            if (distance <= maxDistance) {
+                console.log(`Player ${client.sessionId} eating food ${message.foodId}, value: ${food.value}`);
+                
+                // Add score
+                player.score += food.value;
+                console.log(`New score: ${player.score}`);
+                
+                // Grow snake - add more segments for special food
+                const segmentsToAdd = food.value > 1 ? 3 : 1;
+                for (let i = 0; i < segmentsToAdd; i++) {
+                    player.addSegment();
+                }
+                
+                // Broadcast food consumed to all clients
+                this.broadcast("foodConsumed", {
+                    id: message.foodId,
+                    playerId: player.id,
+                    value: food.value // Send the value so client knows if it was special food
+                });
+                
+                // Remove food
+                this.state.foods.delete(message.foodId);
+                
+                // Spawn new food
+                this.spawnFood();
+            } else {
+                console.log(`Food too far away (${distance} > ${maxDistance})`);
+            }
+        });
+        
         // Add handler for playground message types
         this.onMessage("*", (client, type, message) => {
             // This is a catch-all handler for any message type
@@ -128,7 +187,6 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
             if (!player.alive) return;
             
             this.movePlayer(player);
-            this.checkFoodCollisions(player);
             this.checkPlayerCollisions(player);
         });
         
@@ -199,38 +257,6 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
         // Update the head position
         head.position.x = newX;
         head.position.y = newY;
-    }
-
-    private checkFoodCollisions(player: Player) {
-        const head = player.head;
-        const headRadius = 10; // Approximate head radius
-        
-        this.state.foods.forEach((food, foodId) => {
-            const dx = head.x - food.position.x;
-            const dy = head.y - food.position.y;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            
-            // If collision detected
-            if (distance < headRadius + 5) { // 5 is approximate food radius
-                // Add score
-                player.score += food.value;
-                
-                // Grow snake
-                player.addSegment();
-                
-                // Broadcast food consumed to all clients
-                this.broadcast("foodConsumed", {
-                    id: foodId,
-                    playerId: player.id
-                });
-                
-                // Remove food
-                this.state.foods.delete(foodId);
-                
-                // Spawn new food
-                this.spawnFood();
-            }
-        });
     }
 
     private checkPlayerCollisions(player: Player) {
