@@ -66,6 +66,11 @@ export class GameScene extends Scene {
     // Add this property to the class
     private playerRankText: Phaser.GameObjects.Text;
     
+    // Add these properties to the class
+    private segmentSpacing: number = 20; // Distance between segments
+    private playerSegmentHistories: Map<string, Array<{x: number, y: number}>> = new Map(); // Store histories for all players
+    private historySize: number = 100; // Maximum history size
+    
     constructor() {
         super({
             key: 'GameScene',
@@ -158,7 +163,9 @@ export class GameScene extends Scene {
         // Calculate angle from player's snake head to mouse pointer
         const player = this.gameState.players.get(this.playerId);
         if (player && player.alive) {
-            const head = player.segments[0];
+            // Use headPosition instead of segments[0]
+            const headPosition = player.headPosition;
+            if (!headPosition) return;
             
             // Convert screen coordinates to world coordinates
             const worldX = this.cameras.main.scrollX + this.pointer.x;
@@ -166,8 +173,8 @@ export class GameScene extends Scene {
             
             // Calculate angle
             const angle = Phaser.Math.Angle.Between(
-                head.position.x, 
-                head.position.y,
+                headPosition.x, 
+                headPosition.y,
                 worldX,
                 worldY
             );
@@ -180,11 +187,11 @@ export class GameScene extends Scene {
             
             // Update boost effect position if boosting
             if (player.boosting) {
-                this.updateBoostEffect(head.position.x, head.position.y, angleDeg);
+                this.updateBoostEffect(headPosition.x, headPosition.y, angleDeg);
             }
             
             // Apply food attraction logic
-            this.attractFoodInFront(head.position.x, head.position.y, angleDeg);
+            this.attractFoodInFront(headPosition.x, headPosition.y, angleDeg);
         }
         
         // Update minimap
@@ -217,6 +224,9 @@ export class GameScene extends Scene {
             // Update UI
             this.updateScore();
             this.updateLeaderboard();
+            
+            // Modify the onRoomStateChange handler to update segment count
+            this.onRoomStateChange();
         });
         
         // Handle player died event
@@ -608,6 +618,9 @@ export class GameScene extends Scene {
                     playerText.destroy();
                     this.playerTexts.delete(id);
                 }
+                
+                // Remove segment history
+                this.playerSegmentHistories.delete(id);
             }
         });
         
@@ -615,8 +628,7 @@ export class GameScene extends Scene {
         this.gameState.players.forEach((playerData: any, id: string) => {
             if (!playerData.alive) return;
             
-            // Get segments and color
-            const segments = playerData.segments || [];
+            // Get color and skin
             const color = playerData.color || '#ffffff';
             const skinId = playerData.skinId || 0;
             
@@ -636,13 +648,10 @@ export class GameScene extends Scene {
                 }).setOrigin(0.5, 0.5);
                 nameText.setDepth(100);
                 this.playerTexts.set(id, nameText);
-            }
-            
-            // Make sure we have enough game objects for all segments
-            const currentSegmentCount = snake.getChildren().length;
-            if (currentSegmentCount < segments.length) {
-                // Create new segments as needed
-                for (let i = currentSegmentCount; i < segments.length; i++) {
+                
+                // Create initial segments (5 is the default)
+                const initialSegments = 5;
+                for (let i = 0; i < initialSegments; i++) {
                     const isHead = i === 0;
                     // Apply skin to texture name
                     const texture = isHead ? `snake-head-${skinId}` : `snake-body-${skinId}`;
@@ -667,64 +676,119 @@ export class GameScene extends Scene {
                     // Set appropriate depths for snake segments
                     newSegment.setDepth(isHead ? 20 : 10);
                 }
-            } else if (currentSegmentCount > segments.length) {
-                // Remove extra segments if snake has shrunk
+            }
+            
+            // Ensure we have the right number of segments based on score
+            const targetSegmentCount = 5 + Math.floor(playerData.score);
+            const currentSegmentCount = snake.getChildren().length;
+            
+            if (currentSegmentCount < targetSegmentCount) {
+                // Add segments if needed
+                for (let i = currentSegmentCount; i < targetSegmentCount; i++) {
+                    const texture = `snake-body-${skinId}`;
+                    const textureExists = this.textures.exists(texture);
+                    const finalTexture = textureExists ? texture : 'snake-body';
+                    
+                    const newSegment = this.add.image(0, 0, finalTexture);
+                    newSegment.setTint(parseInt(color.replace('#', '0x')));
+                    newSegment.setDepth(10);
+                    snake.add(newSegment);
+                }
+            } else if (currentSegmentCount > targetSegmentCount) {
+                // Remove segments if needed
                 const children = snake.getChildren();
-                for (let i = segments.length; i < children.length; i++) {
+                for (let i = targetSegmentCount; i < children.length; i++) {
                     children[i].destroy();
                 }
             }
             
-            // Calculate base scale based on score - larger snakes for higher scores
-            // Make it grow faster with a more aggressive formula
-            const baseScale = Math.min(2.0, 1 + (playerData.score / 50));
+            // Get the head position from the server
+            const headPosition = playerData.headPosition;
+            if (!headPosition) return;
             
-            // Update all segment positions
-            for (let i = 0; i < segments.length; i++) {
-                const segment = segments[i];
-                if (!segment || !segment.position) {
-                    console.warn(`Invalid segment at index ${i}:`, segment);
-                    continue;
-                }
-                
-                const segmentObj = snake.getChildren()[i] as Phaser.GameObjects.Image;
-                
-                if (segmentObj) {
-                    // Apply interpolation for smoother movement
-                    // Use a faster lerp factor for the head, slower for the tail
-                    const lerpFactor = i === 0 ? 0.3 : Math.max(0.05, 0.2 - (i * 0.01));
-                    
-                    // Get current position
-                    const currentX = segmentObj.x;
-                    const currentY = segmentObj.y;
-                    
-                    // Calculate interpolated position
-                    const newX = currentX + (segment.position.x - currentX) * lerpFactor;
-                    const newY = currentY + (segment.position.y - currentY) * lerpFactor;
-                    
-                    // Update position
-                    segmentObj.setPosition(newX, newY);
-                    
-                    // Apply scale based on position in snake (head is largest)
-                    const isHead = i === 0;
-                    // Make the scaling more dramatic along the body
-                    const segmentScale = isHead ? baseScale : baseScale * Math.max(0.6, 1 - (i * 0.02));
-                    segmentObj.setScale(segmentScale);
-                }
+            // Get or create segment history for this player
+            let segmentHistory = this.playerSegmentHistories.get(id);
+            if (!segmentHistory) {
+                segmentHistory = [];
+                this.playerSegmentHistories.set(id, segmentHistory);
             }
             
-            // Update head rotation based on angle
-            const head = snake.getChildren()[0] as Phaser.GameObjects.Image;
-            if (head) {
-                head.setRotation(Phaser.Math.DegToRad(playerData.angle + 90));
+            // Add current head position to history
+            segmentHistory.unshift({x: headPosition.x, y: headPosition.y});
+            
+            // Trim history to prevent memory issues
+            if (segmentHistory.length > this.historySize) {
+                segmentHistory.pop();
+            }
+            
+            // Update head position
+            const headObj = snake.getChildren()[0] as Phaser.GameObjects.Image;
+            if (headObj) {
+                // Apply interpolation for smoother movement
+                const lerpFactor = 0.3;
+                
+                // Get current position
+                const currentX = headObj.x;
+                const currentY = headObj.y;
+                
+                // Calculate interpolated position
+                const newX = currentX + (headPosition.x - currentX) * lerpFactor;
+                const newY = currentY + (headPosition.y - currentY) * lerpFactor;
+                
+                // Update position
+                headObj.setPosition(newX, newY);
+                
+                // Calculate base scale based on score
+                const baseScale = Math.min(2.0, 1 + (playerData.score / 50));
+                headObj.setScale(baseScale);
+                
+                // Update head rotation based on angle
+                headObj.setRotation(Phaser.Math.DegToRad(playerData.angle + 90));
                 
                 // Add visual effect for boosting
                 if (playerData.boosting) {
-                    head.setAlpha(0.8 + Math.sin(this.time.now * 0.01) * 0.2); // Pulsing effect
-                    head.setScale(baseScale * 1.2); // Make head slightly larger when boosting
+                    headObj.setAlpha(0.8 + Math.sin(this.time.now * 0.01) * 0.2); // Pulsing effect
+                    headObj.setScale(baseScale * 1.2); // Make head slightly larger when boosting
                 } else {
-                    head.setAlpha(1);
-                    head.setScale(baseScale);
+                    headObj.setAlpha(1);
+                    headObj.setScale(baseScale);
+                }
+                
+                // Update all other segments based on history
+                const segments = snake.getChildren();
+                for (let i = 1; i < segments.length; i++) {
+                    const segmentObj = segments[i] as Phaser.GameObjects.Image;
+                    if (!segmentObj) continue;
+                    
+                    // Calculate history index based on segment spacing
+                    const historyIndex = Math.min(
+                        Math.floor(i * (this.segmentSpacing / playerData.speed)), 
+                        segmentHistory.length - 1
+                    );
+                    
+                    if (segmentHistory[historyIndex]) {
+                        // Apply interpolation for smoother movement
+                        const lerpFactor = Math.max(0.05, 0.2 - (i * 0.01));
+                        
+                        // Get current position
+                        const currentX = segmentObj.x;
+                        const currentY = segmentObj.y;
+                        
+                        // Get target position from history
+                        const targetX = segmentHistory[historyIndex].x;
+                        const targetY = segmentHistory[historyIndex].y;
+                        
+                        // Calculate interpolated position
+                        const newX = currentX + (targetX - currentX) * lerpFactor;
+                        const newY = currentY + (targetY - currentY) * lerpFactor;
+                        
+                        // Update position
+                        segmentObj.setPosition(newX, newY);
+                        
+                        // Apply scale based on position in snake
+                        const segmentScale = baseScale * Math.max(0.6, 1 - (i * 0.02));
+                        segmentObj.setScale(segmentScale);
+                    }
                 }
             }
         });
@@ -874,118 +938,51 @@ export class GameScene extends Scene {
     }
     
     private updateMinimap() {
-        if (!this.gameState || !this.minimap) return;
+        if (!this.gameState) return;
         
         // Clear the minimap
         this.minimap.clear();
         
-        // Draw the border
-        this.minimap.lineStyle(2, 0xffffff, 0.8);
+        // Draw the world border
+        this.minimap.lineStyle(1, 0xFFFFFF, 0.5);
         this.minimap.strokeRect(0, 0, 150, 150);
         
         // Calculate scale factors
         const scaleX = 150 / this.worldWidth;
         const scaleY = 150 / this.worldHeight;
         
-        // Draw world boundaries
-        this.minimap.lineStyle(1, 0x444444, 0.5);
-        this.minimap.strokeRect(0, 0, 150, 150);
-        
-        // Draw grid lines
-        this.minimap.lineStyle(1, 0x444444, 0.3);
-        for (let x = 0; x < this.worldWidth; x += this.worldWidth / 10) {
-            const miniX = x * scaleX;
-            this.minimap.moveTo(miniX, 0);
-            this.minimap.lineTo(miniX, 150);
-        }
-        for (let y = 0; y < this.worldHeight; y += this.worldHeight / 10) {
-            const miniY = y * scaleY;
-            this.minimap.moveTo(0, miniY);
-            this.minimap.lineTo(150, miniY);
-        }
-        
-        // Draw food items (small dots) - Use the local foods Map instead of gameState.foods
-        this.minimap.lineStyle(0, 0x000000, 0); // Add color and alpha parameters
-        this.foods.forEach((foodSprite, foodId) => {
-            if (!foodSprite) return;
+        // Draw all players
+        this.gameState.players.forEach((player: any) => {
+            if (!player.alive || !player.headPosition) return;
             
-            // Use grey color for all food with different sizes for special food
-            const isSpecial = foodSprite.texture.key === 'special-food';
-            const foodColor = 0x888888; // Grey color for all food
-            const foodSize = isSpecial ? 3 : 2; // Double the size from previous values
+            // Use headPosition instead of segments[0]
+            const headPosition = player.headPosition;
             
-            this.minimap.fillStyle(foodColor, 0.6); // Lower alpha for subtlety
-            this.minimap.fillCircle(
-                foodSprite.x * scaleX,
-                foodSprite.y * scaleY,
-                foodSize
-            );
+            // Calculate minimap position
+            const minimapX = headPosition.x * scaleX;
+            const minimapY = headPosition.y * scaleY;
+            
+            // Draw player dot
+            const isCurrentPlayer = player.id === this.playerId;
+            const color = isCurrentPlayer ? 0xFFFF00 : 0xFFFFFF;
+            const size = isCurrentPlayer ? 4 : 2;
+            
+            this.minimap.fillStyle(color, 1);
+            this.minimap.fillCircle(minimapX, minimapY, size);
         });
         
-        // Draw other players (small triangles)
-        this.gameState.players.forEach((player: any, id: string) => {
-            if (!player || !player.alive || id === this.playerId) return;
+        // Draw food dots (smaller and with different color)
+        this.foods.forEach((food) => {
+            const minimapX = food.x * scaleX;
+            const minimapY = food.y * scaleY;
             
-            if (player.segments && player.segments.length > 0) {
-                const head = player.segments[0];
-                if (!head || !head.position) return;
-                
-                // Convert hex color string to number
-                const colorHex = parseInt(player.color.replace('#', '0x'));
-                
-                // Draw a small triangle for other players
-                this.minimap.fillStyle(colorHex, 0.8);
-                
-                // Calculate triangle points based on player angle
-                const angleRad = player.angle * (Math.PI / 180);
-                const miniX = head.position.x * scaleX;
-                const miniY = head.position.y * scaleY;
-                const size = 4;
-                
-                // Calculate triangle points
-                const x1 = miniX + Math.cos(angleRad) * size;
-                const y1 = miniY + Math.sin(angleRad) * size;
-                const x2 = miniX + Math.cos(angleRad + 2.5) * size;
-                const y2 = miniY + Math.sin(angleRad + 2.5) * size;
-                const x3 = miniX + Math.cos(angleRad - 2.5) * size;
-                const y3 = miniY + Math.sin(angleRad - 2.5) * size;
-                
-                // Draw the triangle
-                this.minimap.beginPath();
-                this.minimap.moveTo(x1, y1);
-                this.minimap.lineTo(x2, y2);
-                this.minimap.lineTo(x3, y3);
-                this.minimap.closePath();
-                this.minimap.fillPath();
-            }
+            // Use different colors for different food values
+            const isSpecialFood = food.getData('value') > 1;
+            const foodColor = isSpecialFood ? 0xFF00FF : 0x00FF00;
+            
+            this.minimap.fillStyle(foodColor, 0.7);
+            this.minimap.fillCircle(minimapX, minimapY, 1);
         });
-        
-        // Draw current player (larger dot)
-        const player = this.gameState.players.get(this.playerId);
-        if (player && player.alive && player.segments && player.segments.length > 0) {
-            const head = player.segments[0];
-            if (head && head.position) {
-                // Draw a larger dot for the current player
-                this.minimap.fillStyle(0x00ff00, 1);
-                this.minimap.fillCircle(
-                    head.position.x * scaleX,
-                    head.position.y * scaleY,
-                    4
-                );
-                
-                // Draw a direction indicator
-                const angleRad = player.angle * (Math.PI / 180);
-                const dirX = head.position.x * scaleX + Math.cos(angleRad) * 8;
-                const dirY = head.position.y * scaleY + Math.sin(angleRad) * 8;
-                
-                this.minimap.lineStyle(2, 0x00ff00, 1);
-                this.minimap.beginPath();
-                this.minimap.moveTo(head.position.x * scaleX, head.position.y * scaleY);
-                this.minimap.lineTo(dirX, dirY);
-                this.minimap.closePath();
-                this.minimap.strokePath();
-            }
-        }
     }
     
     private handlePlayerDeath() {
@@ -1035,24 +1032,21 @@ export class GameScene extends Scene {
         if (!this.gameState || !this.playerId) return;
         
         const player = this.gameState.players.get(this.playerId);
-        if (player && player.alive && player.segments.length > 0) {
-            const head = player.segments[0];
-            if (head && head.position) {
-                // Set target camera position to player's head
-                this.targetCameraX = head.position.x;
-                this.targetCameraY = head.position.y;
-                
-                // Get current camera position
-                const currentX = this.cameras.main.scrollX + this.cameras.main.width / 2;
-                const currentY = this.cameras.main.scrollY + this.cameras.main.height / 2;
-                
-                // Calculate interpolated position
-                const newX = currentX + (this.targetCameraX - currentX) * this.cameraLerpFactor;
-                const newY = currentY + (this.targetCameraY - currentY) * this.cameraLerpFactor;
-                
-                // Center camera on interpolated position
-                this.cameras.main.centerOn(newX, newY);
-            }
+        if (player && player.alive && player.headPosition) {
+            // Set target camera position to player's head
+            this.targetCameraX = player.headPosition.x;
+            this.targetCameraY = player.headPosition.y;
+            
+            // Get current camera position
+            const currentX = this.cameras.main.scrollX + this.cameras.main.width / 2;
+            const currentY = this.cameras.main.scrollY + this.cameras.main.height / 2;
+            
+            // Calculate interpolated position
+            const newX = currentX + (this.targetCameraX - currentX) * this.cameraLerpFactor;
+            const newY = currentY + (this.targetCameraY - currentY) * this.cameraLerpFactor;
+            
+            // Center camera on interpolated position
+            this.cameras.main.centerOn(newX, newY);
         }
     }
     
@@ -1062,9 +1056,10 @@ export class GameScene extends Scene {
         
         this.playerTexts.forEach((text, playerId) => {
             const player = this.gameState.players.get(playerId);
-            if (player && player.alive && player.segments.length > 0) {
-                const head = player.segments[0];
-                if (head && head.position) {
+            if (player && player.alive) {
+                // Use headPosition instead of segments[0]
+                const headPosition = player.headPosition;
+                if (headPosition) {
                     // Apply smoother interpolation for text
                     const lerpFactor = 0.2;
                     
@@ -1073,8 +1068,8 @@ export class GameScene extends Scene {
                     const currentY = text.y;
                     
                     // Target position (above the head)
-                    const targetX = head.position.x;
-                    const targetY = head.position.y - 40;
+                    const targetX = headPosition.x;
+                    const targetY = headPosition.y - 40;
                     
                     // Calculate interpolated position
                     const newX = currentX + (targetX - currentX) * lerpFactor;
@@ -1256,5 +1251,46 @@ export class GameScene extends Scene {
         this.time.delayedCall(300, () => {
             particles.destroy();
         });
+    }
+    
+    // Modify the onRoomStateChange handler to update segment count
+    private onRoomStateChange() {
+        // ... existing code ...
+        
+        // When the player's snake changes length, update the segments
+        this.room.state.players.onAdd = (player: any, key: string) => {
+            console.log(`Player added: ${key}`);
+            
+            // Listen for changes to the player's score to update segment count
+            player.listen("score", (newScore: number, oldScore: number) => {
+                if (key === this.playerId) {
+                    // Update segment count based on score changes
+                    const currentSnake = this.snakes.get(key);
+                    if (currentSnake) {
+                        const currentSegmentCount = currentSnake.getLength();
+                        const targetSegmentCount = 5 + Math.floor(newScore); // Base segments + score
+                        
+                        // Add segments if needed
+                        if (targetSegmentCount > currentSegmentCount) {
+                            for (let i = currentSegmentCount; i < targetSegmentCount; i++) {
+                                // Create new segment
+                                const newSegment = this.add.image(0, 0, 'snakeBody');
+                                newSegment.setDepth(10);
+                                currentSnake.add(newSegment);
+                            }
+                        }
+                        // Remove segments if needed (e.g., when boosting)
+                        else if (targetSegmentCount < currentSegmentCount) {
+                            const children = currentSnake.getChildren();
+                            for (let i = targetSegmentCount; i < children.length; i++) {
+                                children[i].destroy();
+                            }
+                        }
+                    }
+                }
+            });
+            
+            // ... rest of existing code ...
+        };
     }
 } 

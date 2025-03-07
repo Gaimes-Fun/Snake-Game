@@ -34,7 +34,7 @@ const config: Phaser.Types.Core.GameConfig = {
         default: 'arcade',
         arcade: {
             debug: false,
-            fps: 120
+            fps: 60
         }
     },
     dom: {
@@ -46,7 +46,7 @@ const config: Phaser.Types.Core.GameConfig = {
         powerPreference: 'high-performance'
     },
     fps: {
-        target: 120,  // Target 120 FPS
+        target: 60,  // Target 120 FPS
         forceSetTimeOut: false
     }
 };

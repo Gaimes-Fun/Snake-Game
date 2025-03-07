@@ -44,12 +44,16 @@ export class Player extends Schema {
     @type("boolean") alive: boolean = true;
     @type("number") skinId: number = 0;
     
-    @type([SnakeSegment]) segments = new ArraySchema<SnakeSegment>();
+    // Remove the @type decorator to prevent automatic synchronization
+    segments = new ArraySchema<SnakeSegment>();
     
     @type("number") totalLength: number = 5;
     
     @type("boolean") boosting: boolean = false;
     @type("number") boostTime: number = 0;
+    
+    // Add head position to sync only the head
+    @type(Vector2) headPosition: Vector2;
 
     constructor(id: string, name: string, x: number, y: number, color: string) {
         super();
@@ -57,6 +61,7 @@ export class Player extends Schema {
         this.name = name;
         this.color = color;
         this.totalLength = 5;
+        this.headPosition = new Vector2(x, y);
         
         // Initialize snake with 5 segments
         for (let i = 0; i < 5; i++) {
@@ -75,6 +80,14 @@ export class Player extends Schema {
             lastSegment.position.y
         );
         this.segments.push(newSegment);
+    }
+    
+    // Add method to update head position
+    updateHeadPosition() {
+        if (this.segments.length > 0) {
+            this.headPosition.x = this.segments[0].position.x;
+            this.headPosition.y = this.segments[0].position.y;
+        }
     }
 }
 

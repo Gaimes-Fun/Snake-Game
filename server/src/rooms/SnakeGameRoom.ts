@@ -257,6 +257,9 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
         // Update the head position
         head.position.x = newX;
         head.position.y = newY;
+        
+        // Update the synchronized head position
+        player.updateHeadPosition();
     }
 
     private checkPlayerCollisions(player: Player) {
