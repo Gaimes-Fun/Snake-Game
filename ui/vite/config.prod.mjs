@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { resolve } from 'path';
 
 const phasermsg = () => {
     return {
@@ -26,6 +27,10 @@ export default defineConfig({
     ],
     logLevel: 'warning',
     build: {
+        outDir: resolve(__dirname, '../dist'),
+        emptyOutDir: true,
+        minify: 'terser',
+        sourcemap: false,
         rollupOptions: {
             output: {
                 manualChunks: {
@@ -33,7 +38,6 @@ export default defineConfig({
                 }
             }
         },
-        minify: 'terser',
         terserOptions: {
             compress: {
                 passes: 2
@@ -42,6 +46,11 @@ export default defineConfig({
             format: {
                 comments: false
             }
+        }
+    },
+    resolve: {
+        alias: {
+            '@': resolve(__dirname, '../src')
         }
     }
 });

@@ -23,8 +23,8 @@ export class GameScene extends Scene {
     private playerTexts: Map<string, Phaser.GameObjects.Text> = new Map();
     
     // Camera and world
-    private worldWidth: number = 4000;
-    private worldHeight: number = 4000;
+    private worldWidth: number = 8000;
+    private worldHeight: number = 8000;
     
     // UI elements
     private scoreText: Phaser.GameObjects.Text;
@@ -38,6 +38,7 @@ export class GameScene extends Scene {
     // Audio
     private eatSound: Phaser.Sound.BaseSound;
     private deathSound: Phaser.Sound.BaseSound;
+    private boostSound: Phaser.Sound.BaseSound;
     
     // Add FPS counter
     private fpsText: Phaser.GameObjects.Text;
@@ -48,8 +49,30 @@ export class GameScene extends Scene {
     private targetCameraY: number = 0;
     private cameraLerpFactor: number = 0.1; // Adjust between 0.05-0.2 for different smoothness
     
+    // Add these properties to the class
+    private respawnButton: Phaser.GameObjects.Text;
+    private menuButton: Phaser.GameObjects.Text;
+    
+    // Add these properties to the class
+    private isBoosting: boolean = false;
+    private boostEffect: Phaser.GameObjects.Particles.ParticleEmitter;
+    
+    // Add this new property
+    private playerCountText: Phaser.GameObjects.Text;
+    
+    // Add this property to the class
+    private backgroundMusic: Phaser.Sound.BaseSound;
+    
     constructor() {
-        super('GameScene');
+        super({
+            key: 'GameScene',
+            physics: {
+                default: 'arcade',
+                arcade: {
+                    debug: false
+                }
+            }
+        });
     }
     
     init(data: GameSceneData) {
@@ -58,9 +81,15 @@ export class GameScene extends Scene {
     }
     
     async create() {
-        // Set up world bounds
-        this.cameras.main.setBounds(0, 0, this.worldWidth, this.worldHeight);
-        this.physics.world.setBounds(0, 0, this.worldWidth, this.worldHeight);
+        // Set up world bounds - with safety check
+        this.cameras.main?.setBounds(0, 0, this.worldWidth, this.worldHeight);
+        
+        // Add safety check for physics world
+        if (this.physics && this.physics.world) {
+            this.physics.world.setBounds(0, 0, this.worldWidth, this.worldHeight);
+        } else {
+            console.warn('Physics system not available, skipping world bounds setup');
+        }
         
         // Create background
         this.createBackground();
@@ -72,8 +101,19 @@ export class GameScene extends Scene {
         this.createUI();
         
         // Set up audio
-        this.eatSound = this.sound.add('eat');
-        this.deathSound = this.sound.add('death');
+        this.setupAudio();
+        
+        // Set up input for boost
+        this.input.on('pointerdown', () => {
+            this.startBoost();
+        });
+        
+        this.input.on('pointerup', () => {
+            this.stopBoost();
+        });
+        
+        // Create boost particle effect
+        this.createBoostEffect();
         
         // Connect to server
         try {
@@ -135,18 +175,20 @@ export class GameScene extends Scene {
             // Send movement input to server
             this.room.send('move', { angle: angleDeg });
             
-            // Update camera to follow player's head
-            // this.cameras.main.centerOn(head.position.x, head.position.y);
+            // Update boost effect position if boosting
+            if (player.boosting) {
+                this.updateBoostEffect(head.position.x, head.position.y, angleDeg);
+            }
         }
         
         // Update minimap
         this.updateMinimap();
         
-        // // Update leaderboard
-        // if (time - this.lastUpdateTime > 1000) { // Update every second
-        //     this.updateLeaderboard();
-        //     this.lastUpdateTime = time;
-        // }
+        // Update leaderboard every second
+        if (time - this.lastUpdateTime > 1000) { // Update every second
+            this.updateLeaderboard();
+            this.lastUpdateTime = time;
+        }
         
         this.updateCamera();
     }
@@ -160,7 +202,11 @@ export class GameScene extends Scene {
             this.worldWidth = state.worldWidth;
             this.worldHeight = state.worldHeight;
             this.cameras.main.setBounds(0, 0, this.worldWidth, this.worldHeight);
-            this.physics.world.setBounds(0, 0, this.worldWidth, this.worldHeight);
+            
+            // Add safety check for physics world
+            if (this.physics && this.physics.world) {
+                this.physics.world.setBounds(0, 0, this.worldWidth, this.worldHeight);
+            }
             
             // Update UI
             this.updateScore();
@@ -175,6 +221,45 @@ export class GameScene extends Scene {
             
             // Play death sound
             this.deathSound.play();
+        });
+        
+        // Handle initial foods message
+        this.room.onMessage('initialFoods', (message) => {
+            console.log(`Received ${message.foods.length} initial foods`);
+            
+            // Clear existing foods
+            this.foods.forEach(food => food.destroy());
+            this.foods.clear();
+            
+            // Add all initial foods
+            message.foods.forEach((food: any) => {
+                const foodSprite = this.createFoodSprite(food.id, food.position.x, food.position.y, food.value);
+                this.foods.set(food.id, foodSprite);
+            });
+        });
+        
+        // Add handler for food spawned
+        this.room.onMessage("foodSpawned", (message) => {
+            // Create food sprite if it doesn't exist
+            if (!this.foods.has(message.id)) {
+                const foodSprite = this.createFoodSprite(message.id, message.position.x, message.position.y, message.value);
+                this.foods.set(message.id, foodSprite);
+            }
+        });
+        
+        // Add handler for food consumed
+        this.room.onMessage("foodConsumed", (message) => {
+            // Remove food sprite if it exists
+            const foodSprite = this.foods.get(message.id);
+            if (foodSprite) {
+                foodSprite.destroy();
+                this.foods.delete(message.id);
+                
+                // Play eat sound only if it's the current player who ate the food
+                if (message.playerId === this.playerId) {
+                    this.eatSound.play({ volume: 0.5 });
+                }
+            }
         });
     }
     
@@ -228,6 +313,15 @@ export class GameScene extends Scene {
             strokeThickness: 3
         }).setScrollFactor(0);
         
+        // Add player count text
+        this.playerCountText = this.add.text(20, 100, 'Players: 0', {
+            fontFamily: 'Arial',
+            fontSize: '16px',
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 3
+        }).setScrollFactor(0);
+        
         // Create leaderboard
         this.createLeaderboard();
         
@@ -236,40 +330,56 @@ export class GameScene extends Scene {
         
         // Create death overlay (hidden by default)
         this.createDeathOverlay();
+        
+        // Add music toggle button
+        const musicButton = this.add.text(this.cameras.main.width - 20, 20, '🔊', {
+            fontFamily: 'Arial',
+            fontSize: '24px',
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 4
+        }).setOrigin(1, 0).setScrollFactor(0).setInteractive({ useHandCursor: true });
+        
+        musicButton.on('pointerdown', () => {
+            this.toggleMusic();
+            musicButton.setText(this.backgroundMusic.isPlaying ? '🔊' : '🔇');
+        });
     }
     
     private createLeaderboard() {
         const width = this.cameras.main.width;
         
-        // Create container for leaderboard
-        this.leaderboardPanel = this.add.container(width - 200, 20);
+        // Create container for leaderboard - increase top margin even more
+        this.leaderboardPanel = this.add.container(width - 200, 80);
         this.leaderboardPanel.setScrollFactor(0);
         
-        // Background
-        const bg = this.add.rectangle(0, 0, 180, 220, 0x000000, 0.5);
+        // Background - make it slightly larger and more transparent
+        const bg = this.add.rectangle(0, 0, 190, 230, 0x000000, 0.4);
         this.leaderboardPanel.add(bg);
         
-        // Title
+        // Title - adjust position and style
         const title = this.add.text(0, -90, 'Leaderboard', {
             fontFamily: 'Arial',
-            fontSize: '18px',
+            fontSize: '20px',
             color: '#ffffff',
             stroke: '#000000',
-            strokeThickness: 2
+            strokeThickness: 3
         }).setOrigin(0.5, 0.5);
         this.leaderboardPanel.add(title);
         
-        // Placeholder for player entries (will be updated)
+        // Placeholder for player entries - increase spacing
         for (let i = 0; i < 5; i++) {
             const entry = this.add.text(
-                -80, -50 + i * 30,
+                -80, -50 + i * 35,  // Increased vertical spacing from 30 to 35
                 `${i + 1}. ---`,
                 {
                     fontFamily: 'Arial',
                     fontSize: '16px',
-                    color: '#ffffff'
+                    color: '#ffffff',
+                    stroke: '#000000',
+                    strokeThickness: 1
                 }
-            );
+            ).setName(`leaderboard-entry-${i}`);
             this.leaderboardPanel.add(entry);
         }
     }
@@ -301,6 +411,7 @@ export class GameScene extends Scene {
         this.deathOverlay = this.add.container(width / 2, height / 2);
         this.deathOverlay.setScrollFactor(0);
         this.deathOverlay.setVisible(false);
+        this.deathOverlay.setDepth(1000); // Set a very high depth to ensure it's on top
         
         // Background
         const bg = this.add.rectangle(0, 0, 400, 300, 0x000000, 0.8);
@@ -319,11 +430,12 @@ export class GameScene extends Scene {
             fontFamily: 'Arial',
             fontSize: '24px',
             color: '#ffffff'
-        }).setOrigin(0.5);
+        }).setOrigin(0.5).setName('scoreText');
         this.deathOverlay.add(scoreText);
         
-        // Respawn button
-        const respawnButton = this.add.text(0, 60, 'Respawn', {
+        // Create buttons outside the container first
+        // Respawn button - create directly in the scene, not in the container
+        this.respawnButton = this.add.text(width / 2, height / 2 + 60, 'Respawn', {
             fontFamily: 'Arial',
             fontSize: '24px',
             color: '#ffffff',
@@ -334,28 +446,35 @@ export class GameScene extends Scene {
                 top: 10,
                 bottom: 10
             }
-        }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+        })
+        .setOrigin(0.5)
+        .setInteractive({ useHandCursor: true })
+        .setName('respawnButton')
+        .setDepth(1001) // Higher than container
+        .setScrollFactor(0)
+        .setVisible(false);
         
-        respawnButton.on('pointerover', () => {
-            respawnButton.setScale(1.1);
+        this.respawnButton.on('pointerover', () => {
+            this.respawnButton.setScale(1.1);
         });
         
-        respawnButton.on('pointerout', () => {
-            respawnButton.setScale(1);
+        this.respawnButton.on('pointerout', () => {
+            this.respawnButton.setScale(1);
         });
         
-        respawnButton.on('pointerdown', () => {
+        this.respawnButton.on('pointerdown', () => {
+            console.log('Respawn button clicked');
             // Send respawn message to server
             this.room.send('respawn');
             
-            // Hide death overlay
+            // Hide death overlay and buttons
             this.deathOverlay.setVisible(false);
+            this.respawnButton.setVisible(false);
+            this.menuButton.setVisible(false);
         });
         
-        this.deathOverlay.add(respawnButton);
-        
-        // Menu button
-        const menuButton = this.add.text(0, 120, 'Main Menu', {
+        // Menu button - create directly in the scene, not in the container
+        this.menuButton = this.add.text(width / 2, height / 2 + 120, 'Main Menu', {
             fontFamily: 'Arial',
             fontSize: '24px',
             color: '#ffffff',
@@ -366,17 +485,24 @@ export class GameScene extends Scene {
                 top: 10,
                 bottom: 10
             }
-        }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+        })
+        .setOrigin(0.5)
+        .setInteractive({ useHandCursor: true })
+        .setName('menuButton')
+        .setDepth(1001) // Higher than container
+        .setScrollFactor(0)
+        .setVisible(false);
         
-        menuButton.on('pointerover', () => {
-            menuButton.setScale(1.1);
+        this.menuButton.on('pointerover', () => {
+            this.menuButton.setScale(1.1);
         });
         
-        menuButton.on('pointerout', () => {
-            menuButton.setScale(1);
+        this.menuButton.on('pointerout', () => {
+            this.menuButton.setScale(1);
         });
         
-        menuButton.on('pointerdown', () => {
+        this.menuButton.on('pointerdown', () => {
+            console.log('Menu button clicked');
             // Disconnect from room
             if (this.room) {
                 this.room.leave();
@@ -385,23 +511,73 @@ export class GameScene extends Scene {
             // Go back to menu
             this.scene.start('MenuScene');
         });
+    }
+    
+    private createBoostEffect() {
+        // Create particle emitter for boost effect
+        if (this.game.textures.exists('boost-particle')) {
+            this.boostEffect = this.add.particles(0, 0, 'boost-particle', {
+                lifespan: 200,
+                speed: { min: 50, max: 100 },
+                scale: { start: 0.5, end: 0 },
+                alpha: { start: 0.7, end: 0 },
+                blendMode: 'ADD',
+                emitting: false
+            });
+        } else {
+            // Fallback if texture doesn't exist
+            console.warn('Boost particle texture not found, using default');
+            this.boostEffect = this.add.particles(0, 0, 'food', {
+                lifespan: 200,
+                speed: { min: 50, max: 100 },
+                scale: { start: 0.5, end: 0 },
+                alpha: { start: 0.7, end: 0 },
+                blendMode: 'ADD',
+                emitting: false
+            });
+        }
+    }
+    
+    private updateBoostEffect(x: number, y: number, angle: number) {
+        if (!this.boostEffect) return;
         
-        this.deathOverlay.add(menuButton);
+        // Position the emitter behind the snake head
+        const offsetX = Math.cos((angle - 180) * Math.PI / 180) * 20;
+        const offsetY = Math.sin((angle - 180) * Math.PI / 180) * 20;
+        
+        this.boostEffect.setPosition(x + offsetX, y + offsetY);
+        this.boostEffect.setEmitterAngle(angle - 180);
+    }
+    
+    private startBoost() {
+        if (!this.room) return;
+        
+        this.isBoosting = true;
+        this.room.send('boost', true);
+        
+        // Play boost sound
+        this.boostSound.play({ volume: 0.3 });
+        
+        // Start particle effect
+        if (this.boostEffect) {
+            this.boostEffect.start();
+        }
+    }
+    
+    private stopBoost() {
+        if (!this.room) return;
+        
+        this.isBoosting = false;
+        this.room.send('boost', false);
+        
+        // Stop particle effect
+        if (this.boostEffect) {
+            this.boostEffect.stop();
+        }
     }
     
     private updateSnakes() {
         if (!this.gameState) return;
-        
-        // Log current player's data to debug
-        if (this.playerId) {
-            const player = this.gameState.players.get(this.playerId);
-            if (player) {
-                console.log("Current player data:", player);
-            } else {
-                console.log("Player ID not found:", this.playerId);
-                console.log("Available players:", Array.from(this.gameState.players.keys()));
-            }
-        }
         
         // First, remove snakes that are no longer in the game
         this.snakes.forEach((snake, id) => {
@@ -427,8 +603,7 @@ export class GameScene extends Scene {
             // Get segments and color
             const segments = playerData.segments || [];
             const color = playerData.color || '#ffffff';
-            
-            console.log(`Player ${id} has ${segments.length} segments, total length: ${playerData.totalLength}`);
+            const skinId = playerData.skinId || 0;
             
             // Get or create snake group
             let snake = this.snakes.get(id);
@@ -447,40 +622,20 @@ export class GameScene extends Scene {
                 this.playerTexts.set(id, nameText);
             }
             
-            // Update existing segments or create new ones
-            for (let i = 0; i < segments.length; i++) {
-                const segment = segments[i];
-                if (!segment || !segment.position) {
-                    console.warn(`Invalid segment at index ${i}:`, segment);
-                    continue;
-                }
-                
-                const segmentObj = snake.getChildren()[i] as Phaser.GameObjects.Image;
-                
-                if (segmentObj) {
-                    // Apply interpolation for smoother movement
-                    // Use a faster lerp factor for the head, slower for the tail
-                    const lerpFactor = i === 0 ? 0.3 : 0.2 - (i * 0.01);
-                    
-                    // Get current position
-                    const currentX = segmentObj.x;
-                    const currentY = segmentObj.y;
-                    
-                    // Calculate interpolated position
-                    const newX = currentX + (segment.position.x - currentX) * lerpFactor;
-                    const newY = currentY + (segment.position.y - currentY) * lerpFactor;
-                    
-                    // Update position
-                    segmentObj.setPosition(newX, newY);
-                } else {
-                    // Create new segment
+            // Make sure we have enough game objects for all segments
+            const currentSegmentCount = snake.getChildren().length;
+            if (currentSegmentCount < segments.length) {
+                // Create new segments as needed
+                for (let i = currentSegmentCount; i < segments.length; i++) {
                     const isHead = i === 0;
-                    const texture = isHead ? 'snake-head' : 'snake-body';
-                    const newSegment = this.add.image(
-                        segment.position.x,
-                        segment.position.y,
-                        texture
-                    );
+                    // Apply skin to texture name
+                    const texture = isHead ? `snake-head-${skinId}` : `snake-body-${skinId}`;
+                    
+                    // Fallback to default textures if the skin-specific ones don't exist
+                    const textureExists = this.textures.exists(texture);
+                    const finalTexture = textureExists ? texture : (isHead ? 'snake-head' : 'snake-body');
+                    
+                    const newSegment = this.add.image(0, 0, finalTexture);
                     
                     // Apply color tint
                     newSegment.setTint(parseInt(color.replace('#', '0x')));
@@ -493,13 +648,39 @@ export class GameScene extends Scene {
                         newSegment.setOrigin(0.5, 0.5);
                     }
                 }
-            }
-            
-            // Remove extra segments if snake has shrunk
-            const children = snake.getChildren();
-            if (children.length > segments.length) {
+            } else if (currentSegmentCount > segments.length) {
+                // Remove extra segments if snake has shrunk
+                const children = snake.getChildren();
                 for (let i = segments.length; i < children.length; i++) {
                     children[i].destroy();
+                }
+            }
+            
+            // Update all segment positions
+            for (let i = 0; i < segments.length; i++) {
+                const segment = segments[i];
+                if (!segment || !segment.position) {
+                    console.warn(`Invalid segment at index ${i}:`, segment);
+                    continue;
+                }
+                
+                const segmentObj = snake.getChildren()[i] as Phaser.GameObjects.Image;
+                
+                if (segmentObj) {
+                    // Apply interpolation for smoother movement
+                    // Use a faster lerp factor for the head, slower for the tail
+                    const lerpFactor = i === 0 ? 0.3 : Math.max(0.05, 0.2 - (i * 0.01));
+                    
+                    // Get current position
+                    const currentX = segmentObj.x;
+                    const currentY = segmentObj.y;
+                    
+                    // Calculate interpolated position
+                    const newX = currentX + (segment.position.x - currentX) * lerpFactor;
+                    const newY = currentY + (segment.position.y - currentY) * lerpFactor;
+                    
+                    // Update position
+                    segmentObj.setPosition(newX, newY);
                 }
             }
             
@@ -507,6 +688,15 @@ export class GameScene extends Scene {
             const head = snake.getChildren()[0] as Phaser.GameObjects.Image;
             if (head) {
                 head.setRotation(Phaser.Math.DegToRad(playerData.angle + 90));
+                
+                // Add visual effect for boosting
+                if (playerData.boosting) {
+                    head.setAlpha(0.8 + Math.sin(this.time.now * 0.01) * 0.2); // Pulsing effect
+                    head.setScale(1.2); // Make head slightly larger when boosting
+                } else {
+                    head.setAlpha(1);
+                    head.setScale(1);
+                }
             }
         });
     }
@@ -524,7 +714,7 @@ export class GameScene extends Scene {
         
         // Then, add or update existing foods
         // Use forEach method of MapSchema instead of Object.entries
-        this.gameState.foods.forEach((foodData, foodId) => {
+        this.gameState.foods.forEach((foodData: any, foodId: string) => {
             // Add null/undefined check to prevent errors
             if (!foodData || !foodData.position) {
                 console.warn(`Food ${foodId} has invalid data:`, foodData);
@@ -541,21 +731,43 @@ export class GameScene extends Scene {
             
             if (!this.foods.has(foodId)) {
                 // Create new food sprite
-                const foodSprite = this.add.image(position.x, position.y, value > 1 ? 'special-food' : 'food');
-                foodSprite.setDepth(5);
+                const foodSprite = this.createFoodSprite(foodId, position.x, position.y, value);
                 this.foods.set(foodId, foodSprite);
             } else {
                 // Update existing food sprite
                 const foodSprite = this.foods.get(foodId);
-                foodSprite.setPosition(position.x, position.y);
-                
-                // Update texture if value changed
-                if ((value > 1 && foodSprite.texture.key !== 'special-food') || 
-                    (value === 1 && foodSprite.texture.key !== 'food')) {
-                    foodSprite.setTexture(value > 1 ? 'special-food' : 'food');
+                if (foodSprite) {
+                    foodSprite.setPosition(position.x, position.y);
+                    
+                    // Update texture if value changed
+                    if ((value > 1 && foodSprite.texture.key !== 'special-food') || 
+                        (value === 1 && foodSprite.texture.key !== 'food')) {
+                        foodSprite.setTexture(value > 1 ? 'special-food' : 'food');
+                    }
                 }
             }
         });
+    }
+    
+    private createFoodSprite(id: string, x: number, y: number, value: number): Phaser.GameObjects.Image {
+        // Create food sprite with appropriate texture based on value
+        const texture = value > 1 ? 'special-food' : 'food';
+        const foodSprite = this.add.image(x, y, texture);
+        
+        // Set depth to ensure food appears below snakes
+        foodSprite.setDepth(5);
+        
+        // Add a small scale animation for visual appeal
+        this.tweens.add({
+            targets: foodSprite,
+            scale: { from: 0.8, to: 1.2 },
+            duration: 1000,
+            yoyo: true,
+            repeat: -1,
+            ease: 'Sine.easeInOut'
+        });
+        
+        return foodSprite;
     }
     
     private updateScore() {
@@ -570,30 +782,18 @@ export class GameScene extends Scene {
     private updateLeaderboard() {
         if (!this.gameState || !this.playerId) return;
         
-        // Get all players
-        const players = Array.from(this.gameState.players.values());
-        
-        // Check if players array exists and has elements
-        if (!players || !Array.isArray(players) || players.length === 0) {
-            // Handle empty leaderboard case
-            for (let i = 0; i < 5; i++) {
-                const entry = this.leaderboardPanel.getByName(`leaderboard-entry-${i}`) as Phaser.GameObjects.Text;
-                if (entry) {
-                    entry.setText(`${i + 1}. ---`);
-                    entry.setColor('#ffffff');
-                }
-            }
-            return;
-        }
+        // Get all players as an array
+        const players: any[] = [];
+        this.gameState.players.forEach((player: any, id: string) => {
+            // Add the id to the player object for reference
+            players.push({...player, id});
+        });
         
         // Sort players by score (descending)
-        const sortedPlayers = [...players].sort((a, b) => {
-            // Add null checks for a and b
-            if (!a || !b) return 0;
-            if (!a.score) return 1;
-            if (!b.score) return -1;
-            return b.score - a.score;
-        });
+        const sortedPlayers = players.sort((a, b) => b.score - a.score);
+        
+        // Update player count
+        this.playerCountText.setText(`Players: ${players.length}`);
         
         // Update leaderboard entries
         for (let i = 0; i < 5; i++) {
@@ -628,54 +828,127 @@ export class GameScene extends Scene {
     }
     
     private updateMinimap() {
-        if (!this.gameState) return;
+        if (!this.gameState || !this.minimap) return;
         
-        // Clear minimap
+        // Clear the minimap
         this.minimap.clear();
         
-        // Draw background
-        this.minimap.fillStyle(0x000000, 0.5);
-        this.minimap.fillRect(0, 0, 100, 100);
-        
-        // Draw border
+        // Draw the border
         this.minimap.lineStyle(2, 0xffffff, 0.8);
-        this.minimap.strokeRect(0, 0, 100, 100);
+        this.minimap.strokeRect(0, 0, 150, 150);
         
-        // Draw players
-        Object.entries(this.gameState.players).forEach(([id, playerData]: [string, any]) => {
-            if (!playerData.alive) return;
+        // Calculate scale factors
+        const scaleX = 150 / this.worldWidth;
+        const scaleY = 150 / this.worldHeight;
+        
+        // Draw world boundaries
+        this.minimap.lineStyle(1, 0x444444, 0.5);
+        this.minimap.strokeRect(0, 0, 150, 150);
+        
+        // Draw grid lines
+        this.minimap.lineStyle(1, 0x444444, 0.3);
+        for (let x = 0; x < this.worldWidth; x += this.worldWidth / 10) {
+            const miniX = x * scaleX;
+            this.minimap.moveTo(miniX, 0);
+            this.minimap.lineTo(miniX, 150);
+        }
+        for (let y = 0; y < this.worldHeight; y += this.worldHeight / 10) {
+            const miniY = y * scaleY;
+            this.minimap.moveTo(0, miniY);
+            this.minimap.lineTo(150, miniY);
+        }
+        
+        // Draw food items (small dots) - Use the local foods Map instead of gameState.foods
+        this.minimap.lineStyle(0);
+        this.foods.forEach((foodSprite, foodId) => {
+            if (!foodSprite) return;
             
-            // Get head position
-            const head = playerData.segments[0];
-            if (!head) return;
+            // Use grey color for all food with different sizes for special food
+            const isSpecial = foodSprite.texture.key === 'special-food';
+            const foodColor = 0x888888; // Grey color for all food
+            const foodSize = isSpecial ? 3 : 2; // Double the size from previous values
             
-            // Scale world coordinates to minimap
-            const x = (head.position.x / this.worldWidth) * 100;
-            const y = (head.position.y / this.worldHeight) * 100;
-            
-            // Draw dot for player
-            const isCurrentPlayer = id === this.playerId;
-            const color = isCurrentPlayer ? 0xffff00 : parseInt(playerData.color.replace('#', '0x'));
-            const size = isCurrentPlayer ? 4 : 3;
-            
-            this.minimap.fillStyle(color, 1);
-            this.minimap.fillCircle(x, y, size);
+            this.minimap.fillStyle(foodColor, 0.6); // Lower alpha for subtlety
+            this.minimap.fillCircle(
+                foodSprite.x * scaleX,
+                foodSprite.y * scaleY,
+                foodSize
+            );
         });
         
-        // Draw current view area
-        const camera = this.cameras.main;
-        const viewX = (camera.scrollX / this.worldWidth) * 100;
-        const viewY = (camera.scrollY / this.worldHeight) * 100;
-        const viewWidth = (camera.width / this.worldWidth) * 100;
-        const viewHeight = (camera.height / this.worldHeight) * 100;
+        // Draw other players (small triangles)
+        this.gameState.players.forEach((player: any, id: string) => {
+            if (!player || !player.alive || id === this.playerId) return;
+            
+            if (player.segments && player.segments.length > 0) {
+                const head = player.segments[0];
+                if (!head || !head.position) return;
+                
+                // Convert hex color string to number
+                const colorHex = parseInt(player.color.replace('#', '0x'));
+                
+                // Draw a small triangle for other players
+                this.minimap.fillStyle(colorHex, 0.8);
+                
+                // Calculate triangle points based on player angle
+                const angleRad = player.angle * (Math.PI / 180);
+                const miniX = head.position.x * scaleX;
+                const miniY = head.position.y * scaleY;
+                const size = 4;
+                
+                // Calculate triangle points
+                const x1 = miniX + Math.cos(angleRad) * size;
+                const y1 = miniY + Math.sin(angleRad) * size;
+                const x2 = miniX + Math.cos(angleRad + 2.5) * size;
+                const y2 = miniY + Math.sin(angleRad + 2.5) * size;
+                const x3 = miniX + Math.cos(angleRad - 2.5) * size;
+                const y3 = miniY + Math.sin(angleRad - 2.5) * size;
+                
+                // Draw the triangle
+                this.minimap.beginPath();
+                this.minimap.moveTo(x1, y1);
+                this.minimap.lineTo(x2, y2);
+                this.minimap.lineTo(x3, y3);
+                this.minimap.closePath();
+                this.minimap.fillPath();
+            }
+        });
         
-        this.minimap.lineStyle(1, 0xffffff, 0.5);
-        this.minimap.strokeRect(viewX, viewY, viewWidth, viewHeight);
+        // Draw current player (larger dot)
+        const player = this.gameState.players.get(this.playerId);
+        if (player && player.alive && player.segments && player.segments.length > 0) {
+            const head = player.segments[0];
+            if (head && head.position) {
+                // Draw a larger dot for the current player
+                this.minimap.fillStyle(0x00ff00, 1);
+                this.minimap.fillCircle(
+                    head.position.x * scaleX,
+                    head.position.y * scaleY,
+                    4
+                );
+                
+                // Draw a direction indicator
+                const angleRad = player.angle * (Math.PI / 180);
+                const dirX = head.position.x * scaleX + Math.cos(angleRad) * 8;
+                const dirY = head.position.y * scaleY + Math.sin(angleRad) * 8;
+                
+                this.minimap.lineStyle(2, 0x00ff00, 1);
+                this.minimap.beginPath();
+                this.minimap.moveTo(head.position.x * scaleX, head.position.y * scaleY);
+                this.minimap.lineTo(dirX, dirY);
+                this.minimap.closePath();
+                this.minimap.strokePath();
+            }
+        }
     }
     
     private handlePlayerDeath() {
         // Show death overlay
         this.deathOverlay.setVisible(true);
+        
+        // Show buttons
+        this.respawnButton.setVisible(true);
+        this.menuButton.setVisible(true);
         
         // Update score on death screen
         const player = this.gameState.players.get(this.playerId);
@@ -686,8 +959,14 @@ export class GameScene extends Scene {
             }
         }
         
+        // Ensure buttons are interactive
+        this.respawnButton.setInteractive({ useHandCursor: true });
+        this.menuButton.setInteractive({ useHandCursor: true });
+        
         // Play death sound
         this.deathSound.play();
+        
+        console.log('Death overlay shown');
     }
     
     private updateCamera() {
@@ -744,5 +1023,39 @@ export class GameScene extends Scene {
                 }
             }
         });
+    }
+    
+    private setupAudio() {
+        // Set up sound effects
+        this.eatSound = this.sound.add('eat');
+        this.deathSound = this.sound.add('death');
+        this.boostSound = this.sound.add('boost');
+        
+        // Set up background music with loop
+        this.backgroundMusic = this.sound.add('background', {
+            volume: 0.3,
+            loop: true
+        });
+        
+        // Start playing background music
+        this.backgroundMusic.play();
+    }
+    
+    private toggleMusic() {
+        if (this.backgroundMusic.isPlaying) {
+            this.backgroundMusic.pause();
+        } else {
+            this.backgroundMusic.resume();
+        }
+    }
+    
+    shutdown() {
+        // Stop background music when leaving the scene
+        if (this.backgroundMusic) {
+            this.backgroundMusic.stop();
+        }
+        
+        // Call the parent shutdown method
+        super.shutdown();
     }
 } 

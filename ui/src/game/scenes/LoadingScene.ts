@@ -40,36 +40,42 @@ export class LoadingScene extends Scene {
             this.generateTextures();
             
             // Create dummy sound objects
-            this.createDummySounds();
+            // this.createDummySounds();
             
             // Move to the menu scene
             this.scene.start('MenuScene');
         });
+
+        // Load audio files
+        this.load.audio('eat', 'sounds/eat.mp3');
+        this.load.audio('death', 'sounds/death.wav');
+        this.load.audio('boost', 'sounds/eat.mp3'); // Reusing eat sound for boost
+        this.load.audio('background', 'sounds/background.mp3'); // Add background music
     }
 
-    private createDummySounds() {
-        // Create dummy sound objects that do nothing when played
-        const dummySound = {
-            play: () => {},
-            stop: () => {},
-            pause: () => {},
-            resume: () => {},
-            destroy: () => {}
-        };
+    // private createDummySounds() {
+    //     // Create dummy sound objects that do nothing when played
+    //     const dummySound = {
+    //         play: () => {},
+    //         stop: () => {},
+    //         pause: () => {},
+    //         resume: () => {},
+    //         destroy: () => {}
+    //     };
         
-        // Add these to the game's sound manager
-        this.sound.sounds = this.sound.sounds || [];
+    //     // Add these to the game's sound manager
+    //     this.sound.sounds = this.sound.sounds || [];
         
-        // Create a method to return our dummy sound
-        const originalAdd = this.sound.add;
-        this.sound.add = function(key: string) {
-            return dummySound;
-        };
+    //     // Create a method to return our dummy sound
+    //     const originalAdd = this.sound.add;
+    //     this.sound.add = function(key: string) {
+    //         return dummySound;
+    //     };
         
-        // Create references to our sounds
-        this.sound.add('eat');
-        this.sound.add('death');
-    }
+    //     // Create references to our sounds
+    //     this.sound.add('eat');
+    //     this.sound.add('death');
+    // }
 
     private generateTextures() {
         // Generate background texture

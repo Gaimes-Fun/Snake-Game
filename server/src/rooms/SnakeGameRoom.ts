@@ -6,10 +6,16 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
     tickRate = 16; // Changed from 20 to 16 ms (approximately 60 FPS)
     gameLoopInterval: Delayed;
     
-    // Colors for snakes
+    // Colors for snakes - expanded palette with 8 distinct colors
     private colors = [
-        "#FF5733", "#33FF57", "#3357FF", "#F3FF33", 
-        "#FF33F3", "#33FFF3", "#F333FF", "#FF3333"
+        "#FF5733", // Orange (skin 0)
+        "#33FF57", // Green (skin 1)
+        "#3357FF", // Blue (skin 2)
+        "#F3FF33", // Yellow (skin 3)
+        "#FF33F3", // Pink (skin 4)
+        "#33FFF3", // Cyan (skin 5)
+        "#9933FF", // Purple (skin 6)
+        "#FF3333"  // Red (skin 7)
     ];
 
     // Math constants
@@ -25,6 +31,18 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
             const player = this.state.players.get(client.sessionId);
             if (player && player.alive) {
                 player.angle = message.angle;
+            }
+        });
+
+        this.onMessage("boost", (client, active: boolean) => {
+            const player = this.state.players.get(client.sessionId);
+            if (player && player.alive) {
+                // Only allow boost if player has enough score/segments
+                if (active && player.score >= 1) {
+                    player.boosting = true;
+                } else {
+                    player.boosting = false;
+                }
             }
         });
 
@@ -53,9 +71,12 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
         
         // Create a new player
         const spawnPosition = this.getRandomPosition();
-        const color = this.colors[Math.floor(Math.random() * this.colors.length)];
         
-        console.log(`Spawning player at position: ${spawnPosition.x}, ${spawnPosition.y} with color: ${color}`);
+        // Use the skinId to determine the color
+        const skinId = options.skinId !== undefined ? options.skinId : 0;
+        const color = this.colors[skinId % this.colors.length];
+        
+        console.log(`Spawning player at position: ${spawnPosition.x}, ${spawnPosition.y} with color: ${color} and skin: ${skinId}`);
         
         const player = new Player(
             client.sessionId,
@@ -65,19 +86,30 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
             color
         );
         
-        if (options.skinId !== undefined) {
-            player.skinId = options.skinId;
-        }
+        // Set the skinId
+        player.skinId = skinId;
         
         this.state.players.set(client.sessionId, player);
         console.log(`Player created with ID: ${client.sessionId}, segments: ${player.segments.length}`);
         
         // Send a welcome message to the client
-        this.send(client, "welcome", { 
+        client.send("welcome", { 
             id: client.sessionId,
             position: spawnPosition,
             color: color
         });
+        
+        // Send all existing food to the new client
+        const initialFoods: any[] = [];
+        this.state.foods.forEach((food, foodId) => {
+            initialFoods.push({
+                id: foodId,
+                position: { x: food.position.x, y: food.position.y },
+                value: food.value
+            });
+        });
+        
+        client.send("initialFoods", { foods: initialFoods });
     }
 
     onLeave(client: Client, consented: boolean) {
@@ -115,7 +147,39 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
         // Calculate new position based on angle and speed
         // Convert degrees to radians manually instead of using Phaser
         const angleRad = player.angle * this.DEG_TO_RAD;
-        const speedMultiplier = 1.5; // Add a speed multiplier for faster movement
+        
+        // Apply speed boost if player is boosting
+        const speedMultiplier = player.boosting ? 6 : 3; // Faster when boosting
+        
+        // If boosting, consume score/energy over time
+        if (player.boosting) {
+            player.boostTime += this.tickRate;
+            
+            // Consume 1 point every 500ms of boosting
+            if (player.boostTime >= 500) {
+                player.boostTime = 0;
+                
+                // Only reduce score if player has more than minimum segments
+                if (player.segments.length > 5) {
+                    player.score = Math.max(0, player.score - 1);
+                    
+                    // Remove a segment when boosting
+                    if (player.segments.length > 5) {
+                        player.segments.pop();
+                    } else {
+                        // If not enough segments, disable boosting
+                        player.boosting = false;
+                    }
+                } else {
+                    // Not enough segments to continue boosting
+                    player.boosting = false;
+                }
+            }
+        } else {
+            // Reset boost timer when not boosting
+            player.boostTime = 0;
+        }
+        
         const dx = Math.cos(angleRad) * player.speed * speedMultiplier;
         const dy = Math.sin(angleRad) * player.speed * speedMultiplier;
         
@@ -153,6 +217,12 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
                 
                 // Grow snake
                 player.addSegment();
+                
+                // Broadcast food consumed to all clients
+                this.broadcast("foodConsumed", {
+                    id: foodId,
+                    playerId: player.id
+                });
                 
                 // Remove food
                 this.state.foods.delete(foodId);
@@ -241,14 +311,24 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
             const segment = player.segments[segmentIndex];
             
             const foodId = `food_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            const foodX = segment.position.x + (Math.random() * 40 - 20);
+            const foodY = segment.position.y + (Math.random() * 40 - 20);
+            
             const food = new Food(
                 foodId,
-                segment.position.x + (Math.random() * 40 - 20),
-                segment.position.y + (Math.random() * 40 - 20),
+                foodX,
+                foodY,
                 1
             );
             
             this.state.foods.set(foodId, food);
+            
+            // Broadcast new food to all clients
+            this.broadcast("foodSpawned", {
+                id: foodId,
+                position: { x: foodX, y: foodY },
+                value: 1
+            });
         }
     }
 
@@ -268,6 +348,13 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
         
         const food = new Food(foodId, position.x, position.y, value);
         this.state.foods.set(foodId, food);
+        
+        // Broadcast new food to all clients
+        this.broadcast("foodSpawned", {
+            id: foodId,
+            position: { x: position.x, y: position.y },
+            value: value
+        });
     }
 
     private getRandomPosition() {

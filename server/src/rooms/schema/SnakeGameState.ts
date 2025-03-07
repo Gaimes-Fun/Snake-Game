@@ -1,5 +1,5 @@
-import { Schema, type, MapSchema, ArraySchema } from "@colyseus/schema";
-
+import { Schema, type, MapSchema, ArraySchema, Encoder } from "@colyseus/schema";
+Encoder.BUFFER_SIZE = 1024 * 1024; // 1 MB
 // Simple position class without Schema inheritance to reduce overhead
 export class Vector2 extends Schema {
     @type("number") x: number;
@@ -44,15 +44,12 @@ export class Player extends Schema {
     @type("boolean") alive: boolean = true;
     @type("number") skinId: number = 0;
     
-    // Only sync the first 20 segments - client can interpolate the rest
     @type([SnakeSegment]) segments = new ArraySchema<SnakeSegment>();
     
-    // Store the total length separately - this allows the client to know how long
-    // the snake should be without syncing all segments
     @type("number") totalLength: number = 5;
     
-    // Maximum number of segments to sync (prevents buffer overflow)
-    private readonly MAX_SYNC_SEGMENTS = 20;
+    @type("boolean") boosting: boolean = false;
+    @type("number") boostTime: number = 0;
 
     constructor(id: string, name: string, x: number, y: number, color: string) {
         super();
@@ -62,8 +59,7 @@ export class Player extends Schema {
         this.totalLength = 5;
         
         // Initialize snake with 5 segments
-        const initialSegments = Math.min(5, this.MAX_SYNC_SEGMENTS);
-        for (let i = 0; i < initialSegments; i++) {
+        for (let i = 0; i < 5; i++) {
             this.segments.push(new SnakeSegment(x - i * 20, y));
         }
     }
@@ -73,27 +69,25 @@ export class Player extends Schema {
     }
 
     addSegment() {
-        this.totalLength++;
-        
-        // Only add a new segment to the array if we're below the sync limit
-        if (this.segments.length < this.MAX_SYNC_SEGMENTS) {
-            const lastSegment = this.segments[this.segments.length - 1];
-            const newSegment = new SnakeSegment(
-                lastSegment.position.x,
-                lastSegment.position.y
-            );
-            this.segments.push(newSegment);
-        }
+        const lastSegment = this.segments[this.segments.length - 1];
+        const newSegment = new SnakeSegment(
+            lastSegment.position.x,
+            lastSegment.position.y
+        );
+        this.segments.push(newSegment);
     }
 }
 
 export class SnakeGameState extends Schema {
     @type({ map: Player }) players = new MapSchema<Player>();
-    @type({ map: Food }) foods = new MapSchema<Food>();
-    @type("number") worldWidth: number = 4000;
-    @type("number") worldHeight: number = 4000;
-    @type("number") maxFoods: number = 50; // Further reduced to prevent buffer overflow
-    @type("number") tickRate: number = 20; // ms per tick
+    
+    // Remove the type decorator for foods to prevent automatic synchronization
+    foods = new MapSchema<Food>();
+    
+    @type("number") worldWidth: number = 8000;
+    @type("number") worldHeight: number = 8000;
+    @type("number") maxFoods: number = 1000; 
+    @type("number") tickRate: number = 16; // ms per tick
     
     // Add a timestamp for client-side interpolation
     @type("number") timestamp: number = 0;

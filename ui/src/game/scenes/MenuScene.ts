@@ -5,7 +5,7 @@ import { GAME_INFO } from '../../configs/game';
 export class MenuScene extends Scene {
     private playerName: string = 'Player';
     private selectedSkin: number = 0;
-    private skins: number[] = [0, 1, 2, 3]; // Skin IDs
+    private skins: number[] = [0, 1, 2, 3, 4, 5, 6, 7]; // Skin IDs
     private skinImages: Phaser.GameObjects.Image[] = [];
     
     constructor() {
@@ -147,15 +147,11 @@ export class MenuScene extends Scene {
             
             // Selection indicator
             const selectionIndicator = this.add.rectangle(0, 0, 70, 70, 0xffff00, 0)
-                .setStrokeStyle(3, 0xffff00);
+                .setStrokeStyle(3, 0xffff00, i === this.selectedSkin ? 1 : 0);
             container.add(selectionIndicator);
             
-            // Show selection for default skin
-            if (i === this.selectedSkin) {
-                selectionIndicator.setStrokeStyle(3, 0xffff00);
-            } else {
-                selectionIndicator.setStrokeStyle(3, 0xffff00, 0);
-            }
+            // Store the selection indicator with a name for reference
+            selectionIndicator.setName(`selection_${i}`);
             
             // Handle click
             bg.on('pointerdown', () => {
@@ -163,26 +159,35 @@ export class MenuScene extends Scene {
                 
                 // Update all selection indicators
                 for (let j = 0; j < this.skins.length; j++) {
-                    const indicator = this.children.getByName(`selection_${j}`) as Phaser.GameObjects.Rectangle;
-                    if (j === i) {
-                        selectionIndicator.setStrokeStyle(3, 0xffff00, 1);
-                    } else {
-                        const otherIndicator = this.children.getByName(`selection_${j}`) as Phaser.GameObjects.Rectangle;
-                        if (otherIndicator) {
-                            otherIndicator.setStrokeStyle(3, 0xffff00, 0);
+                    // Find the container at the same index as the skin
+                    const containers = this.children.list.filter(child => 
+                        child instanceof Phaser.GameObjects.Container
+                    ) as Phaser.GameObjects.Container[];
+                    
+                    // Get the selection indicator from each container (it's the third child)
+                    if (containers[j] && containers[j].list && containers[j].list.length >= 3) {
+                        const indicator = containers[j].list[2] as Phaser.GameObjects.Rectangle;
+                        if (indicator) {
+                            indicator.setStrokeStyle(3, 0xffff00, j === i ? 1 : 0);
                         }
                     }
                 }
             });
-            
-            // Name the selection indicator for easy access
-            selectionIndicator.setName(`selection_${i}`);
         }
     }
     
     private getSkinColor(skinId: number): number {
-        // Return different colors based on skin ID
-        const colors = [0xFF5733, 0x33FF57, 0x3357FF, 0xF3FF33];
+        // Return different colors based on skin ID - match with server colors
+        const colors = [
+            0xFF5733, // Orange (skin 0)
+            0x33FF57, // Green (skin 1)
+            0x3357FF, // Blue (skin 2)
+            0xF3FF33, // Yellow (skin 3)
+            0xFF33F3, // Pink (skin 4)
+            0x33FFF3, // Cyan (skin 5)
+            0x9933FF, // Purple (skin 6)
+            0xFF3333  // Red (skin 7)
+        ];
         return colors[skinId % colors.length];
     }
 } 

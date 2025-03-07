@@ -1,7 +1,0 @@
----
-description: When you want to generate sound
-globs: ui/public/sounds/**/*
----
-# GENERATE SOUND
-1. You create a prompt to generate sound
-2. Run command to terminal "maga-ai generate sound <prompt> --output <path>"
