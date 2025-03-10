@@ -2,6 +2,7 @@ import { Scene } from 'phaser';
 import { EventBus } from '../EventBus';
 import { colyseusClient } from '../../services/ColyseusClient';
 import { Room } from 'colyseus.js';
+import { Player } from "../../types/SchemaTypes";
 
 interface GameSceneData {
     playerName: string;
@@ -67,9 +68,22 @@ export class GameScene extends Scene {
     private playerRankText: Phaser.GameObjects.Text;
     
     // Add these properties to the class
-    private segmentSpacing: number = 20; // Distance between segments
+    private segmentSpacing: number = 12; // Reduced from 20 to 12 for closer segments
     private playerSegmentHistories: Map<string, Array<{x: number, y: number}>> = new Map(); // Store histories for all players
     private historySize: number = 100; // Maximum history size
+    
+    // Add this new property
+    private killNotifications: Phaser.GameObjects.Container[] = [];
+    
+    // Add this new property
+    private statsPanel: Phaser.GameObjects.Container;
+    
+    // Add this property to the class
+    private lastAngle: number = 0;
+    private maxAngleChange: number = 10; // Maximum angle change per frame (in degrees)
+    
+    // Add this property to the GameScene class
+    private invulnerableUntil: number = 0;
     
     constructor() {
         super({
@@ -180,7 +194,26 @@ export class GameScene extends Scene {
             );
             
             // Convert to degrees
-            const angleDeg = Phaser.Math.RadToDeg(angle);
+            let angleDeg = Phaser.Math.RadToDeg(angle);
+            
+            // Apply angle smoothing - limit the maximum angle change per frame
+            if (this.lastAngle !== undefined) {
+                // Calculate the difference between current and last angle
+                let angleDiff = angleDeg - this.lastAngle;
+                
+                // Normalize the difference to handle the -180/180 boundary
+                if (angleDiff > 180) angleDiff -= 360;
+                if (angleDiff < -180) angleDiff += 360;
+                
+                // Limit the angle change to maxAngleChange
+                if (Math.abs(angleDiff) > this.maxAngleChange) {
+                    const sign = Math.sign(angleDiff);
+                    angleDeg = this.lastAngle + (sign * this.maxAngleChange);
+                }
+            }
+            
+            // Update the last angle
+            this.lastAngle = angleDeg;
             
             // Send movement input to server
             this.room.send('move', { angle: angleDeg });
@@ -204,6 +237,28 @@ export class GameScene extends Scene {
         }
         
         this.updateCamera();
+        
+        // Check for collisions
+        this.checkPlayerCollisions();
+        
+        // Add visual effect for invulnerability
+        if (time < this.invulnerableUntil) {
+            const player = this.gameState.players.get(this.playerId);
+            if (player && player.alive) {
+                const snake = this.snakes.get(this.playerId);
+                if (snake) {
+                    // Make the snake flash during invulnerability
+                    const isVisible = Math.floor(time / 150) % 2 === 0;
+                    snake.setAlpha(isVisible ? 1 : 0.3);
+                }
+            }
+        } else {
+            // Ensure normal visibility when not invulnerable
+            const snake = this.snakes.get(this.playerId);
+            if (snake) {
+                snake.setAlpha(1);
+            }
+        }
     }
     
     private setupRoomHandlers() {
@@ -277,6 +332,24 @@ export class GameScene extends Scene {
                 }
             }
         });
+        
+        // Add a specific handler for playerKilled events
+        this.room.onMessage('playerKilled', (message) => {
+            console.log('Received playerKilled event:', message);
+            
+            if (message && message.killer && message.killed) {
+                this.showKillNotification(message.killer, message.killed);
+            } else {
+                console.error('Invalid playerKilled message format:', message);
+            }
+        });
+        
+        // Add invulnerability when joining
+        this.room.onMessage('welcome', (message) => {
+            // Set invulnerability for 3 seconds
+            this.invulnerableUntil = this.time.now + 3000;
+            console.log('Player is invulnerable until:', this.invulnerableUntil);
+        });
     }
     
     private createBackground() {
@@ -311,64 +384,88 @@ export class GameScene extends Scene {
     }
     
     private createUI() {
-        // Score text
-        this.scoreText = this.add.text(20, 20, 'Score: 0', {
-            fontFamily: 'Arial',
-            fontSize: '24px',
+        // Create stats card container
+        this.statsPanel = this.add.container(20, 20)
+            .setScrollFactor(0)
+            .setDepth(100);
+        
+        // Add background with gradient and rounded corners
+        const cardWidth = 200;
+        const cardHeight = 120;
+        const cardBg = this.add.graphics();
+        cardBg.fillGradientStyle(
+            0x000033, 0x000033,  // Dark blue at top
+            0x000022, 0x000022,  // Darker blue at bottom
+            1, 1, 1, 1
+        );
+        cardBg.fillRoundedRect(0, 0, cardWidth, cardHeight, 10);
+        cardBg.lineStyle(2, 0x3333ff, 0.8);
+        cardBg.strokeRoundedRect(0, 0, cardWidth, cardHeight, 10);
+        this.statsPanel.add(cardBg);
+        
+        // Add title
+        const titleBg = this.add.graphics();
+        titleBg.fillStyle(0x3333ff, 0.8);
+        titleBg.fillRoundedRect(0, 0, cardWidth, 30, { tl: 10, tr: 10, bl: 0, br: 0 });
+        this.statsPanel.add(titleBg);
+        
+        const title = this.add.text(cardWidth / 2, 15, 'PLAYER STATS', { 
+            fontFamily: 'Arial', 
+            fontSize: '16px', 
+            fontStyle: 'bold',
             color: '#ffffff',
             stroke: '#000000',
-            strokeThickness: 4
-        }).setScrollFactor(0);
+            strokeThickness: 2
+        }).setOrigin(0.5, 0.5);
+        this.statsPanel.add(title);
         
-        // Add player rank text
-        this.playerRankText = this.add.text(20, 60, 'Rank: -', {
-            fontFamily: 'Arial',
-            fontSize: '24px',
-            color: '#ffffff',
-            stroke: '#000000',
-            strokeThickness: 4
-        }).setScrollFactor(0);
+        // Add score with icon
+        const scoreIcon = this.add.image(20, 50, 'food')
+            .setTint(0xffff00)
+            .setScale(1.2);
+        this.statsPanel.add(scoreIcon);
         
-        // FPS counter - move down to accommodate rank text
-        this.fpsText = this.add.text(20, 100, 'FPS: 0', {
-            fontFamily: 'Arial',
+        this.scoreText = this.add.text(45, 50, 'Score: 0', { 
+            fontFamily: 'Arial', 
             fontSize: '16px',
-            color: '#00ff00',
+            color: '#ffffff',
             stroke: '#000000',
-            strokeThickness: 3
-        }).setScrollFactor(0);
+            strokeThickness: 2
+        }).setOrigin(0, 0.5);
+        this.statsPanel.add(this.scoreText);
         
-        // Add player count text - move down to accommodate rank text
-        this.playerCountText = this.add.text(20, 140, 'Players: 0', {
-            fontFamily: 'Arial',
+        // Add rank with icon
+        const rankIcon = this.add.image(20, 80, 'food')
+            .setTint(0x00ffff)
+            .setScale(1.2);
+        this.statsPanel.add(rankIcon);
+        
+        this.playerRankText = this.add.text(45, 80, 'Rank: -/-', { 
+            fontFamily: 'Arial', 
             fontSize: '16px',
             color: '#ffffff',
             stroke: '#000000',
-            strokeThickness: 3
-        }).setScrollFactor(0);
+            strokeThickness: 2
+        }).setOrigin(0, 0.5);
+        this.statsPanel.add(this.playerRankText);
         
-        // Create leaderboard
-        this.createLeaderboard();
+        // Add FPS counter with icon
+        const fpsIcon = this.add.image(20, 110, 'food')
+            .setTint(0x00ff00)
+            .setScale(1.2);
+        this.statsPanel.add(fpsIcon);
+        
+        this.fpsText = this.add.text(45, 110, 'FPS: 0', { 
+            fontFamily: 'Arial', 
+            fontSize: '16px',
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 2
+        }).setOrigin(0, 0.5);
+        this.statsPanel.add(this.fpsText);
         
         // Create minimap
         this.createMinimap();
-        
-        // Create death overlay (hidden by default)
-        this.createDeathOverlay();
-        
-        // Add music toggle button
-        const musicButton = this.add.text(this.cameras.main.width - 20, 20, '🔊', {
-            fontFamily: 'Arial',
-            fontSize: '24px',
-            color: '#ffffff',
-            stroke: '#000000',
-            strokeThickness: 4
-        }).setOrigin(1, 0).setScrollFactor(0).setInteractive({ useHandCursor: true });
-        
-        musicButton.on('pointerdown', () => {
-            this.toggleMusic();
-            musicButton.setText(this.backgroundMusic.isPlaying ? '🔊' : '🔇');
-        });
     }
     
     private createLeaderboard() {
@@ -377,6 +474,7 @@ export class GameScene extends Scene {
         // Create container for leaderboard - increase top margin even more
         this.leaderboardPanel = this.add.container(width - 200, 80);
         this.leaderboardPanel.setScrollFactor(0);
+        this.leaderboardPanel.setDepth(100);
         
         // Background - make it slightly larger and more transparent
         const bg = this.add.rectangle(0, 0, 190, 230, 0x000000, 0.4);
@@ -410,132 +508,164 @@ export class GameScene extends Scene {
     }
     
     private createMinimap() {
-        const width = this.cameras.main.width;
-        const height = this.cameras.main.height;
+        // Create minimap container
+        const minimapSize = 150;
+        const margin = 20; // Margin from the edges of the screen
         
-        // Create minimap graphics
+        // Create a background for the minimap
+        const minimapBg = this.add.graphics();
+        minimapBg.fillStyle(0x000033, 0.7); // Dark blue background with transparency
+        minimapBg.fillRoundedRect(0, 0, minimapSize + 10, minimapSize + 10, 8); // Slightly larger than the minimap with rounded corners
+        minimapBg.lineStyle(2, 0x3333ff, 0.8); // Blue border
+        minimapBg.strokeRoundedRect(0, 0, minimapSize + 10, minimapSize + 10, 8);
+        
+        // Position the background in the bottom right corner
+        minimapBg.setPosition(
+            this.cameras.main.width - minimapSize - margin - 5, 
+            this.cameras.main.height - minimapSize - margin - 5
+        );
+        minimapBg.setScrollFactor(0);
+        minimapBg.setDepth(90);
+        
+        // Create the minimap
         this.minimap = this.add.graphics();
+        
+        // Position the minimap in the bottom right corner, centered within the background
+        this.minimap.setPosition(
+            this.cameras.main.width - minimapSize - margin, 
+            this.cameras.main.height - minimapSize - margin
+        );
         this.minimap.setScrollFactor(0);
-        this.minimap.x = width - 120;
-        this.minimap.y = height - 120;
+        this.minimap.setDepth(91);
         
-        // Add background
-        this.minimap.fillStyle(0x000000, 0.5);
-        this.minimap.fillRect(0, 0, 100, 100);
-        
-        // Add border
-        this.minimap.lineStyle(2, 0xffffff, 0.8);
-        this.minimap.strokeRect(0, 0, 100, 100);
+        // Add a title for the minimap
+        const minimapTitle = this.add.text(
+            this.cameras.main.width - minimapSize/2 - margin,
+            this.cameras.main.height - minimapSize - margin - 15,
+            'MAP',
+            {
+                fontFamily: 'Arial',
+                fontSize: '14px',
+                fontStyle: 'bold',
+                color: '#ffffff',
+                stroke: '#000000',
+                strokeThickness: 2
+            }
+        ).setOrigin(0.5, 0.5).setScrollFactor(0).setDepth(91);
     }
     
     private createDeathOverlay() {
+        // Create death overlay container
+        this.deathOverlay = this.add.container(0, 0);
+        this.deathOverlay.setDepth(1000);
+        this.deathOverlay.setScrollFactor(0);
+        
+        // Add semi-transparent background
         const width = this.cameras.main.width;
         const height = this.cameras.main.height;
-        
-        // Create container for death overlay
-        this.deathOverlay = this.add.container(width / 2, height / 2);
-        this.deathOverlay.setScrollFactor(0);
-        this.deathOverlay.setVisible(false);
-        this.deathOverlay.setDepth(1000); // Set a very high depth to ensure it's on top
-        
-        // Background
-        const bg = this.add.rectangle(0, 0, 400, 300, 0x000000, 0.8);
+        const bg = this.add.rectangle(width/2, height/2, width, height, 0x000000, 0.7);
         this.deathOverlay.add(bg);
         
-        // Death message
-        const message = this.add.text(0, -80, 'You Died!', {
+        // Add death message
+        const deathText = this.add.text(width/2, height/2 - 100, 'YOU DIED', {
             fontFamily: 'Arial',
-            fontSize: '36px',
-            color: '#ff0000'
+            fontSize: '64px',
+            color: '#ff0000',
+            stroke: '#000000',
+            strokeThickness: 6
         }).setOrigin(0.5);
-        this.deathOverlay.add(message);
+        this.deathOverlay.add(deathText);
         
-        // Score display
-        const scoreText = this.add.text(0, -20, 'Score: 0', {
+        // Add score text with a name so we can find it later
+        const scoreText = this.add.text(width/2, height/2, 'Score: 0', {
             fontFamily: 'Arial',
-            fontSize: '24px',
-            color: '#ffffff'
+            fontSize: '32px',
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 4
         }).setOrigin(0.5).setName('scoreText');
         this.deathOverlay.add(scoreText);
         
-        // Create buttons outside the container first
-        // Respawn button - create directly in the scene, not in the container
-        this.respawnButton = this.add.text(width / 2, height / 2 + 60, 'Respawn', {
+        // Create buttons directly in the scene instead of in the container
+        // This ensures they're properly interactive
+        
+        // Respawn button
+        this.respawnButton = this.add.text(width/2, height/2 + 100, 'RESPAWN', {
             fontFamily: 'Arial',
-            fontSize: '24px',
+            fontSize: '32px',
             color: '#ffffff',
-            backgroundColor: '#4CAF50',
+            backgroundColor: '#990000',
             padding: {
                 left: 20,
                 right: 20,
                 top: 10,
                 bottom: 10
             }
-        })
-        .setOrigin(0.5)
-        .setInteractive({ useHandCursor: true })
-        .setName('respawnButton')
-        .setDepth(1001) // Higher than container
-        .setScrollFactor(0)
-        .setVisible(false);
+        }).setOrigin(0.5);
         
+        // Make sure the button is interactive
+        this.respawnButton.setInteractive({ useHandCursor: true });
+        this.respawnButton.setScrollFactor(0);
+        this.respawnButton.setDepth(1001); // Higher than the overlay
+        
+        // Add hover effects
         this.respawnButton.on('pointerover', () => {
-            this.respawnButton.setScale(1.1);
+            this.respawnButton.setStyle({ backgroundColor: '#cc0000' });
         });
         
         this.respawnButton.on('pointerout', () => {
-            this.respawnButton.setScale(1);
+            this.respawnButton.setStyle({ backgroundColor: '#990000' });
         });
         
+        // Add click handler
         this.respawnButton.on('pointerdown', () => {
             console.log('Respawn button clicked');
-            // Send respawn message to server
-            this.room.send('respawn');
-            
-            // Hide death overlay and buttons
-            this.deathOverlay.setVisible(false);
-            this.respawnButton.setVisible(false);
-            this.menuButton.setVisible(false);
+            this.respawn();
         });
         
-        // Menu button - create directly in the scene, not in the container
-        this.menuButton = this.add.text(width / 2, height / 2 + 120, 'Main Menu', {
+        // Menu button
+        this.menuButton = this.add.text(width/2, height/2 + 180, 'BACK TO MENU', {
             fontFamily: 'Arial',
             fontSize: '24px',
             color: '#ffffff',
-            backgroundColor: '#2196F3',
+            backgroundColor: '#333333',
             padding: {
                 left: 20,
                 right: 20,
                 top: 10,
                 bottom: 10
             }
-        })
-        .setOrigin(0.5)
-        .setInteractive({ useHandCursor: true })
-        .setName('menuButton')
-        .setDepth(1001) // Higher than container
-        .setScrollFactor(0)
-        .setVisible(false);
+        }).setOrigin(0.5);
         
+        // Make sure the button is interactive
+        this.menuButton.setInteractive({ useHandCursor: true });
+        this.menuButton.setScrollFactor(0);
+        this.menuButton.setDepth(1001); // Higher than the overlay
+        
+        // Add hover effects
         this.menuButton.on('pointerover', () => {
-            this.menuButton.setScale(1.1);
+            this.menuButton.setStyle({ backgroundColor: '#555555' });
         });
         
         this.menuButton.on('pointerout', () => {
-            this.menuButton.setScale(1);
+            this.menuButton.setStyle({ backgroundColor: '#333333' });
         });
         
+        // Add click handler
         this.menuButton.on('pointerdown', () => {
             console.log('Menu button clicked');
-            // Disconnect from room
             if (this.room) {
                 this.room.leave();
             }
-            
-            // Go back to menu
             this.scene.start('MenuScene');
         });
+        
+        // Hide everything by default
+        this.deathOverlay.setVisible(false);
+        this.respawnButton.setVisible(false);
+        this.menuButton.setVisible(false);
+        
+        return this.deathOverlay;
     }
     
     private createBoostEffect() {
@@ -638,13 +768,21 @@ export class GameScene extends Scene {
                 snake = this.add.group();
                 this.snakes.set(id, snake);
                 
-                // Create player name text
+                // Create player name text with glow effect
                 const nameText = this.add.text(0, 0, playerData.name, {
                     fontFamily: 'Arial',
                     fontSize: '18px',
                     color: '#ffffff',
                     stroke: '#000000',
-                    strokeThickness: 4
+                    strokeThickness: 4,
+                    shadow: {
+                        offsetX: 2,
+                        offsetY: 2,
+                        color: '#000000',
+                        blur: 5,
+                        stroke: true,
+                        fill: true
+                    }
                 }).setOrigin(0.5, 0.5);
                 nameText.setDepth(100);
                 this.playerTexts.set(id, nameText);
@@ -675,6 +813,22 @@ export class GameScene extends Scene {
                     
                     // Set appropriate depths for snake segments
                     newSegment.setDepth(isHead ? 20 : 10);
+                    
+                    // Add glow effect to head
+                    if (isHead) {
+                        // Create a glow sprite behind the head
+                        const glow = this.add.image(0, 0, finalTexture)
+                            .setTint(parseInt(color.replace('#', '0x')))
+                            .setAlpha(0.3)
+                            .setScale(1.5);
+                        glow.setDepth(19); // Just below the head
+                        
+                        // Add the glow to the snake group
+                        snake.add(glow);
+                        
+                        // Store reference to the glow for updates
+                        newSegment.setData('glow', glow);
+                    }
                 }
             }
             
@@ -682,9 +836,12 @@ export class GameScene extends Scene {
             const targetSegmentCount = 5 + Math.floor(playerData.score);
             const currentSegmentCount = snake.getChildren().length;
             
-            if (currentSegmentCount < targetSegmentCount) {
+            // Adjust for the glow object (1 glow per snake)
+            const actualSegmentCount = currentSegmentCount - 1;
+            
+            if (actualSegmentCount < targetSegmentCount) {
                 // Add segments if needed
-                for (let i = currentSegmentCount; i < targetSegmentCount; i++) {
+                for (let i = actualSegmentCount; i < targetSegmentCount; i++) {
                     const texture = `snake-body-${skinId}`;
                     const textureExists = this.textures.exists(texture);
                     const finalTexture = textureExists ? texture : 'snake-body';
@@ -694,10 +851,11 @@ export class GameScene extends Scene {
                     newSegment.setDepth(10);
                     snake.add(newSegment);
                 }
-            } else if (currentSegmentCount > targetSegmentCount) {
+            } else if (actualSegmentCount > targetSegmentCount) {
                 // Remove segments if needed
                 const children = snake.getChildren();
-                for (let i = targetSegmentCount; i < children.length; i++) {
+                // Skip the first two objects (head and glow)
+                for (let i = targetSegmentCount + 1; i < children.length; i++) {
                     children[i].destroy();
                 }
             }
@@ -722,7 +880,10 @@ export class GameScene extends Scene {
             }
             
             // Update head position
-            const headObj = snake.getChildren()[0] as Phaser.GameObjects.Image;
+            const children = snake.getChildren();
+            const headObj = children[0] as Phaser.GameObjects.Image;
+            const glowObj = headObj.getData('glow') as Phaser.GameObjects.Image;
+            
             if (headObj) {
                 // Apply interpolation for smoother movement
                 const lerpFactor = 0.3;
@@ -738,6 +899,11 @@ export class GameScene extends Scene {
                 // Update position
                 headObj.setPosition(newX, newY);
                 
+                // Update glow position
+                if (glowObj) {
+                    glowObj.setPosition(newX, newY);
+                }
+                
                 // Calculate base scale based on score
                 const baseScale = Math.min(2.0, 1 + (playerData.score / 50));
                 headObj.setScale(baseScale);
@@ -745,30 +911,55 @@ export class GameScene extends Scene {
                 // Update head rotation based on angle
                 headObj.setRotation(Phaser.Math.DegToRad(playerData.angle + 90));
                 
+                // Update glow rotation
+                if (glowObj) {
+                    glowObj.setRotation(Phaser.Math.DegToRad(playerData.angle + 90));
+                }
+                
                 // Add visual effect for boosting
                 if (playerData.boosting) {
                     headObj.setAlpha(0.8 + Math.sin(this.time.now * 0.01) * 0.2); // Pulsing effect
                     headObj.setScale(baseScale * 1.2); // Make head slightly larger when boosting
+                    
+                    // Make glow more intense when boosting
+                    if (glowObj) {
+                        glowObj.setAlpha(0.5 + Math.sin(this.time.now * 0.01) * 0.2);
+                        glowObj.setScale(baseScale * 2.0);
+                    }
+                    
+                    // Add trail particles when boosting
+                    if (id === this.playerId && this.time.now % 5 === 0) {
+                        this.addTrailParticle(newX, newY, color);
+                    }
                 } else {
                     headObj.setAlpha(1);
                     headObj.setScale(baseScale);
+                    
+                    // Normal glow
+                    if (glowObj) {
+                        glowObj.setAlpha(0.3);
+                        glowObj.setScale(baseScale * 1.5);
+                    }
                 }
                 
                 // Update all other segments based on history
-                const segments = snake.getChildren();
-                for (let i = 1; i < segments.length; i++) {
-                    const segmentObj = segments[i] as Phaser.GameObjects.Image;
+                // Skip the glow object in the children array
+                for (let i = 1; i < children.length; i++) {
+                    // Skip the glow object
+                    if (children[i] === glowObj) continue;
+                    
+                    const segmentObj = children[i] as Phaser.GameObjects.Image;
                     if (!segmentObj) continue;
                     
                     // Calculate history index based on segment spacing
                     const historyIndex = Math.min(
-                        Math.floor(i * (this.segmentSpacing / playerData.speed)), 
+                        Math.floor((i-1) * (this.segmentSpacing / playerData.speed)), 
                         segmentHistory.length - 1
                     );
                     
                     if (segmentHistory[historyIndex]) {
                         // Apply interpolation for smoother movement
-                        const lerpFactor = Math.max(0.05, 0.2 - (i * 0.01));
+                        const lerpFactor = Math.max(0.05, 0.2 - ((i-1) * 0.01));
                         
                         // Get current position
                         const currentX = segmentObj.x;
@@ -786,10 +977,35 @@ export class GameScene extends Scene {
                         segmentObj.setPosition(newX, newY);
                         
                         // Apply scale based on position in snake
-                        const segmentScale = baseScale * Math.max(0.6, 1 - (i * 0.02));
+                        const segmentScale = baseScale * Math.max(0.6, 1 - ((i-1) * 0.02));
                         segmentObj.setScale(segmentScale);
+                        
+                        // Add subtle pulsing effect to segments
+                        const pulseAmount = 0.05 * Math.sin((this.time.now * 0.005) + (i * 0.5));
+                        segmentObj.setScale(segmentScale * (1 + pulseAmount));
+                        
+                        // Add subtle alpha variation for a more organic look
+                        const alphaVariation = 0.1 * Math.sin((this.time.now * 0.003) + (i * 0.3));
+                        segmentObj.setAlpha(0.9 + alphaVariation);
                     }
                 }
+            }
+        });
+    }
+    
+    private addTrailParticle(x: number, y: number, color: string) {
+        const particle = this.add.circle(x, y, 5, parseInt(color.replace('#', '0x')), 0.7);
+        particle.setDepth(5); // Below snake segments
+        
+        // Add fade out and scale down effect
+        this.tweens.add({
+            targets: particle,
+            alpha: 0,
+            scale: 0.5,
+            duration: 300,
+            ease: 'Power2',
+            onComplete: () => {
+                particle.destroy();
             }
         });
     }
@@ -800,13 +1016,18 @@ export class GameScene extends Scene {
         // First, handle removed foods
         this.foods.forEach((foodSprite, foodId) => {
             if (!this.gameState.foods.has(foodId)) {
+                // Remove glow if it exists
+                const glow = foodSprite.getData('glow');
+                if (glow) {
+                    glow.destroy();
+                }
+                
                 foodSprite.destroy();
                 this.foods.delete(foodId);
             }
         });
         
         // Then, add or update existing foods
-        // Use forEach method of MapSchema instead of Object.entries
         this.gameState.foods.forEach((foodData: any, foodId: string) => {
             // Add null/undefined check to prevent errors
             if (!foodData || !foodData.position) {
@@ -833,10 +1054,56 @@ export class GameScene extends Scene {
                     // Apply the server position
                     foodSprite.setPosition(position.x, position.y);
                     
+                    // Update glow position if it exists
+                    const glow = foodSprite.getData('glow');
+                    if (glow) {
+                        glow.setPosition(position.x, position.y);
+                    }
+                    
                     // Update texture if value changed
                     if ((value > 1 && foodSprite.texture.key !== 'special-food') || 
                         (value === 1 && foodSprite.texture.key !== 'food')) {
                         foodSprite.setTexture(value > 1 ? 'special-food' : 'food');
+                        
+                        // Add or remove glow based on new value
+                        if (value > 1 && !glow) {
+                            // Create new glow for special food
+                            const newGlow = this.add.image(position.x, position.y, 'special-food')
+                                .setTint(0xffff00)
+                                .setAlpha(0.3)
+                                .setScale(1.5)
+                                .setDepth(4);
+                            
+                            foodSprite.setData('glow', newGlow);
+                            
+                            // Add pulsing animation to the glow
+                            this.tweens.add({
+                                targets: newGlow,
+                                scale: { from: 1.5, to: 2.0 },
+                                alpha: { from: 0.3, to: 0.5 },
+                                duration: 800,
+                                yoyo: true,
+                                repeat: -1,
+                                ease: 'Sine.easeInOut'
+                            });
+                            
+                            // Add rotation animation to special food
+                            this.tweens.add({
+                                targets: foodSprite,
+                                angle: 360,
+                                duration: 3000,
+                                repeat: -1,
+                                ease: 'Linear'
+                            });
+                        } else if (value === 1 && glow) {
+                            // Remove glow for normal food
+                            glow.destroy();
+                            foodSprite.setData('glow', null);
+                            
+                            // Stop rotation animation
+                            this.tweens.killTweensOf(foodSprite);
+                            foodSprite.setAngle(0);
+                        }
                     }
                 }
             }
@@ -851,7 +1118,43 @@ export class GameScene extends Scene {
         // Set depth to ensure food appears below snakes
         foodSprite.setDepth(5);
         
-        // Add a small scale animation for visual appeal
+        // Store the food value for reference
+        foodSprite.setData('value', value);
+        
+        // Add a glow effect for special food
+        if (value > 1) {
+            // Create a glow sprite behind the food
+            const glow = this.add.image(x, y, texture)
+                .setTint(0xffff00) // Golden glow for special food
+                .setAlpha(0.3)
+                .setScale(1.5)
+                .setDepth(4); // Below the food
+            
+            // Store reference to the glow
+            foodSprite.setData('glow', glow);
+            
+            // Add pulsing animation to the glow
+            this.tweens.add({
+                targets: glow,
+                scale: { from: 1.5, to: 2.0 },
+                alpha: { from: 0.3, to: 0.5 },
+                duration: 800,
+                yoyo: true,
+                repeat: -1,
+                ease: 'Sine.easeInOut'
+            });
+            
+            // Add rotation animation to special food
+            this.tweens.add({
+                targets: foodSprite,
+                angle: 360,
+                duration: 3000,
+                repeat: -1,
+                ease: 'Linear'
+            });
+        }
+        
+        // Add a scale animation for visual appeal
         this.tweens.add({
             targets: foodSprite,
             scale: { from: 0.8, to: 1.2 },
@@ -874,65 +1177,184 @@ export class GameScene extends Scene {
     }
     
     private updateLeaderboard() {
-        if (!this.gameState || !this.playerId) return;
+        if (!this.room || !this.room.state || !this.room.state.players) return;
         
-        // Get all players as an array
-        const players: any[] = [];
-        this.gameState.players.forEach((player: any, id: string) => {
-            // Add the id to the player object for reference
-            players.push({...player, id});
+        // Clear existing leaderboard entries
+        if (this.leaderboardPanel) {
+            this.leaderboardPanel.removeAll(true);
+        } else {
+            // Create leaderboard panel if it doesn't exist
+            this.leaderboardPanel = this.add.container(this.cameras.main.width - 220, 10);
+            this.leaderboardPanel.setScrollFactor(0);
+            this.leaderboardPanel.setDepth(100);
+        }
+        
+        // Add background with gradient and rounded corners
+        const bgWidth = 220;
+        const bgHeight = 300;
+        const bg = this.add.graphics();
+        bg.fillGradientStyle(
+            0x000033, 0x000033,  // Dark blue at top
+            0x000022, 0x000022,  // Darker blue at bottom
+            1, 1, 1, 1
+        );
+        bg.fillRoundedRect(-bgWidth/2, 0, bgWidth, bgHeight, 10);
+        bg.lineStyle(2, 0x3333ff, 0.8);
+        bg.strokeRoundedRect(-bgWidth/2, 0, bgWidth, bgHeight, 10);
+        this.leaderboardPanel.add(bg);
+        
+        // Add title with icon
+        const titleBg = this.add.graphics();
+        titleBg.fillStyle(0x3333ff, 0.8);
+        titleBg.fillRoundedRect(-bgWidth/2, 0, bgWidth, 40, { tl: 10, tr: 10, bl: 0, br: 0 });
+        this.leaderboardPanel.add(titleBg);
+        
+        const title = this.add.text(0, 20, 'LEADERBOARD', { 
+            fontFamily: 'Arial', 
+            fontSize: '20px', 
+            fontStyle: 'bold',
+            color: '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 2
+        }).setOrigin(0.5, 0.5);
+        
+        this.leaderboardPanel.add(title);
+        
+        // Add column headers
+        const headerY = 50;
+        const rankHeader = this.add.text(-bgWidth/2 + 20, headerY, 'RANK', { 
+            fontFamily: 'Arial', 
+            fontSize: '12px',
+            color: '#aaaaff',
+            fontStyle: 'bold'
         });
         
-        // Sort players by score (descending)
-        const sortedPlayers = players.sort((a, b) => b.score - a.score);
+        const nameHeader = this.add.text(-bgWidth/2 + 60, headerY, 'NAME', { 
+            fontFamily: 'Arial', 
+            fontSize: '12px',
+            color: '#aaaaff',
+            fontStyle: 'bold'
+        });
         
-        // Update player count
-        this.playerCountText.setText(`Players: ${players.length}`);
+        const scoreHeader = this.add.text(-bgWidth/2 + 140, headerY, 'SCORE', { 
+            fontFamily: 'Arial', 
+            fontSize: '12px',
+            color: '#aaaaff',
+            fontStyle: 'bold'
+        });
         
-        // Find current player's rank
-        let playerRank = -1;
-        for (let i = 0; i < sortedPlayers.length; i++) {
-            if (sortedPlayers[i].id === this.playerId) {
-                playerRank = i + 1;
-                break;
-            }
-        }
+        const killsHeader = this.add.text(-bgWidth/2 + 190, headerY, 'KILLS', { 
+            fontFamily: 'Arial', 
+            fontSize: '12px',
+            color: '#aaaaff',
+            fontStyle: 'bold'
+        });
         
-        // Update player rank text
-        if (playerRank > 0) {
-            this.playerRankText.setText(`Rank: ${playerRank}/${players.length}`);
-        } else {
-            this.playerRankText.setText('Rank: -');
-        }
+        this.leaderboardPanel.add(rankHeader);
+        this.leaderboardPanel.add(nameHeader);
+        this.leaderboardPanel.add(scoreHeader);
+        this.leaderboardPanel.add(killsHeader);
         
-        // Update leaderboard entries
-        for (let i = 0; i < 5; i++) {
-            const entry = this.leaderboardPanel.getByName(`leaderboard-entry-${i}`) as Phaser.GameObjects.Text;
-            if (!entry) continue;
+        // Add separator line
+        const separator = this.add.graphics();
+        separator.lineStyle(1, 0x3333ff, 0.5);
+        separator.lineBetween(-bgWidth/2 + 10, headerY + 15, bgWidth/2 - 10, headerY + 15);
+        this.leaderboardPanel.add(separator);
+        
+        // Get players and sort by score
+        const players: any[] = [];
+        this.room.state.players.forEach((player: Player, sessionId: string) => {
+            players.push({
+                id: sessionId,
+                name: player.name,
+                score: player.score,
+                kills: player.kills || 0,
+                color: player.color
+            });
+        });
+        
+        players.sort((a, b) => b.score - a.score);
+        
+        // Add player entries
+        const topPlayers = players.slice(0, 10); // Show top 10 players
+        topPlayers.forEach((player, index) => {
+            const isCurrentPlayer = player.id === this.playerId;
+            const rowY = 75 + (index * 22);
             
-            const player = sortedPlayers[i];
-            if (player) {
-                const isCurrentPlayer = player.id === this.playerId;
-                
-                // Format name to fit
-                let name = player.name || 'Unknown';
-                if (name.length > 10) {
-                    name = name.substring(0, 8) + '..';
-                }
-                
-                // Update text
-                entry.setText(`${i + 1}. ${name}: ${player.score || 0}`);
-                
-                // Highlight current player
-                if (isCurrentPlayer) {
-                    entry.setColor('#ffff00');
-                } else {
-                    entry.setColor('#ffffff');
-                }
-            } else {
-                // No player for this entry
-                entry.setText(`${i + 1}. ---`);
-                entry.setColor('#ffffff');
+            // Add row background for current player
+            if (isCurrentPlayer) {
+                const rowBg = this.add.graphics();
+                rowBg.fillStyle(0x3333ff, 0.3);
+                rowBg.fillRoundedRect(-bgWidth/2 + 10, rowY - 10, bgWidth - 20, 20, 5);
+                this.leaderboardPanel.add(rowBg);
+            }
+            
+            // Rank with medal for top 3
+            let rankText = `${index + 1}`;
+            let rankColor = '#ffffff';
+            
+            if (index === 0) {
+                rankText = '🥇';
+                rankColor = '#ffd700'; // Gold
+            } else if (index === 1) {
+                rankText = '🥈';
+                rankColor = '#c0c0c0'; // Silver
+            } else if (index === 2) {
+                rankText = '🥉';
+                rankColor = '#cd7f32'; // Bronze
+            }
+            
+            const rank = this.add.text(-bgWidth/2 + 20, rowY, rankText, { 
+                fontFamily: 'Arial', 
+                fontSize: '14px',
+                color: rankColor,
+                fontStyle: isCurrentPlayer ? 'bold' : 'normal'
+            }).setOrigin(0, 0.5);
+            
+            // Player name with color indicator
+            const nameColor = isCurrentPlayer ? '#ffff00' : '#ffffff';
+            const nameText = player.name.length > 10 ? player.name.substr(0, 8) + '..' : player.name;
+            
+            // Color indicator circle
+            const colorCircle = this.add.graphics();
+            colorCircle.fillStyle(parseInt(player.color.replace('#', '0x')), 1);
+            colorCircle.fillCircle(-bgWidth/2 + 55, rowY, 4);
+            
+            const name = this.add.text(-bgWidth/2 + 65, rowY, nameText, { 
+                fontFamily: 'Arial', 
+                fontSize: '14px',
+                color: nameColor,
+                fontStyle: isCurrentPlayer ? 'bold' : 'normal'
+            }).setOrigin(0, 0.5);
+            
+            // Score
+            const score = this.add.text(-bgWidth/2 + 140, rowY, `${player.score}`, { 
+                fontFamily: 'Arial', 
+                fontSize: '14px',
+                color: nameColor,
+                fontStyle: isCurrentPlayer ? 'bold' : 'normal'
+            }).setOrigin(0, 0.5);
+            
+            // Kills with skull icon
+            const kills = this.add.text(-bgWidth/2 + 190, rowY, `${player.kills}`, { 
+                fontFamily: 'Arial', 
+                fontSize: '14px',
+                color: nameColor,
+                fontStyle: isCurrentPlayer ? 'bold' : 'normal'
+            }).setOrigin(0, 0.5);
+            
+            this.leaderboardPanel.add(rank);
+            this.leaderboardPanel.add(colorCircle);
+            this.leaderboardPanel.add(name);
+            this.leaderboardPanel.add(score);
+            this.leaderboardPanel.add(kills);
+        });
+        
+        // Update player's rank
+        const currentPlayerIndex = players.findIndex(p => p.id === this.playerId);
+        if (currentPlayerIndex !== -1) {
+            if (this.playerRankText) {
+                this.playerRankText.setText(`Rank: ${currentPlayerIndex + 1}/${players.length}`);
             }
         }
     }
@@ -986,46 +1408,53 @@ export class GameScene extends Scene {
     }
     
     private handlePlayerDeath() {
-        // Show death overlay
-        this.deathOverlay.setVisible(true);
+        console.log('Player died!');
         
-        // Show buttons
-        this.respawnButton.setVisible(true);
-        this.menuButton.setVisible(true);
-        
-        // Update score and rank on death screen
-        const player = this.gameState.players.get(this.playerId);
-        if (player) {
-            const scoreText = this.deathOverlay.getByName('scoreText') as Phaser.GameObjects.Text;
-            if (scoreText) {
-                // Get player rank
-                let playerRank = -1;
-                const players: any[] = [];
-                this.gameState.players.forEach((p: any) => {
-                    if (p.score > 0) players.push(p);
-                });
-                
-                const sortedPlayers = players.sort((a, b) => b.score - a.score);
-                for (let i = 0; i < sortedPlayers.length; i++) {
-                    if (sortedPlayers[i].id === this.playerId) {
-                        playerRank = i + 1;
-                        break;
-                    }
-                }
-                
-                // Show score and rank
-                scoreText.setText(`Score: ${player.score}\nRank: ${playerRank > 0 ? playerRank : '-'}/${players.length}`);
-            }
+        // Make sure deathOverlay exists before trying to use it
+        if (!this.deathOverlay) {
+            this.createDeathOverlay();
         }
         
-        // Ensure buttons are interactive
-        this.respawnButton.setInteractive({ useHandCursor: true });
-        this.menuButton.setInteractive({ useHandCursor: true });
+        // Show death overlay
+        this.showDeathOverlay();
+    }
+    
+    private showDeathOverlay() {
+        // Make sure deathOverlay exists before trying to use it
+        if (!this.deathOverlay) {
+            this.createDeathOverlay();
+        }
         
-        // Play death sound
-        this.deathSound.play();
+        this.deathOverlay.setVisible(true);
         
-        console.log('Death overlay shown');
+        // Also show the buttons
+        if (this.respawnButton) this.respawnButton.setVisible(true);
+        if (this.menuButton) this.menuButton.setVisible(true);
+        
+        // Update score on death screen
+        const player = this.gameState.players.get(this.playerId);
+        if (player) {
+            // Find the score text in the death overlay container
+            const scoreText = this.deathOverlay.getByName('scoreText');
+            if (scoreText && scoreText instanceof Phaser.GameObjects.Text) {
+                scoreText.setText(`Score: ${player.score}`);
+            } else {
+                // If scoreText doesn't exist or isn't properly set up, create a new one
+                const width = this.cameras.main.width;
+                const height = this.cameras.main.height;
+                
+                const newScoreText = this.add.text(width/2, height/2, `Score: ${player.score}`, {
+                    fontFamily: 'Arial',
+                    fontSize: '32px',
+                    color: '#ffffff',
+                    stroke: '#000000',
+                    strokeThickness: 4
+                }).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
+                
+                newScoreText.setName('scoreText');
+                this.deathOverlay.add(newScoreText);
+            }
+        }
     }
     
     private updateCamera() {
@@ -1110,17 +1539,19 @@ export class GameScene extends Scene {
         }
     }
     
-    shutdown() {
+    destroy(fromScene?: boolean) {
         // Stop background music when leaving the scene
         if (this.backgroundMusic) {
             this.backgroundMusic.stop();
         }
         
-        // Call the parent shutdown method instead of destroy
-        super.shutdown();
+        // Call the parent destroy method - using Scene's proper method
+        if (fromScene) {
+            super.destroy();
+        }
     }
     
-    // Add this new method to attract food in front of the snake
+    // Update the attractFoodInFront method to handle glow cleanup when food is eaten
     private attractFoodInFront(headX: number, headY: number, angleDeg: number) {
         if (!this.gameState || !this.foods) return;
         
@@ -1173,6 +1604,13 @@ export class GameScene extends Scene {
                 // Check if food is close enough to be eaten
                 const newDistance = Phaser.Math.Distance.Between(headX, headY, foodSprite.x, foodSprite.y);
                 if (newDistance < eatDistance) {
+                    // Get and destroy glow if it exists before hiding the food
+                    const glow = foodSprite.getData('glow');
+                    if (glow) {
+                        glow.destroy();
+                        foodSprite.setData('glow', null);
+                    }
+                    
                     // Visually "eat" the food immediately
                     foodSprite.setVisible(false);
                     foodSprite.setScale(0);
@@ -1181,7 +1619,7 @@ export class GameScene extends Scene {
                     this.eatSound.play({ volume: 0.5 });
                     
                     // Add a visual effect at the position
-                    this.addEatEffect(foodSprite.x, foodSprite.y);
+                    this.addEatEffect(foodSprite.x, foodSprite.y, foodSprite.getData('value') || 1);
                     
                     // Send message to server that food was eaten, including current positions
                     console.log(`Sending eatFood message for food ${foodId}, distance: ${newDistance}`);
@@ -1235,21 +1673,63 @@ export class GameScene extends Scene {
         });
     }
     
-    // Thêm phương thức mới để tạo hiệu ứng khi ăn thức ăn
-    private addEatEffect(x: number, y: number) {
-        // Tạo hiệu ứng particle khi ăn thức ăn
-        const particles = this.add.particles(x, y, 'food', {
-            speed: { min: 50, max: 150 },
-            scale: { start: 0.6, end: 0 },
-            alpha: { start: 1, end: 0 },
-            lifespan: 300,
-            quantity: 5,
-            blendMode: 'ADD'
+    // Update the addEatEffect method to show different values for special food
+    private addEatEffect(x: number, y: number, value: number = 1) {
+        // Create a flash effect
+        const flash = this.add.circle(x, y, 30, value > 1 ? 0xffff00 : 0xffffff, 0.7);
+        flash.setDepth(30);
+        
+        // Add fade out and scale up effect
+        this.tweens.add({
+            targets: flash,
+            alpha: 0,
+            scale: 2,
+            duration: 200,
+            ease: 'Power2',
+            onComplete: () => {
+                flash.destroy();
+            }
         });
         
-        // Tự động hủy sau khi hoàn thành
-        this.time.delayedCall(300, () => {
+        // Create particle burst effect
+        const particles = this.add.particles(x, y, value > 1 ? 'special-food' : 'food', {
+            speed: { min: 50, max: 200 },
+            scale: { start: 0.6, end: 0 },
+            alpha: { start: 1, end: 0 },
+            lifespan: 500,
+            quantity: value > 1 ? 15 : 10,
+            blendMode: 'ADD',
+            emitting: false
+        });
+        
+        // Emit particles once
+        particles.explode(value > 1 ? 15 : 10);
+        
+        // Auto-destroy after animation completes
+        this.time.delayedCall(500, () => {
             particles.destroy();
+        });
+        
+        // Add a score popup text
+        const scoreText = this.add.text(x, y - 20, `+${value}`, {
+            fontFamily: 'Arial',
+            fontSize: value > 1 ? '24px' : '20px',
+            color: value > 1 ? '#ffff00' : '#ffffff',
+            stroke: '#000000',
+            strokeThickness: 3
+        }).setOrigin(0.5, 0.5);
+        
+        // Animate the score text
+        this.tweens.add({
+            targets: scoreText,
+            y: y - 60,
+            alpha: 0,
+            scale: 1.5,
+            duration: 800,
+            ease: 'Power2',
+            onComplete: () => {
+                scoreText.destroy();
+            }
         });
     }
     
@@ -1292,5 +1772,259 @@ export class GameScene extends Scene {
             
             // ... rest of existing code ...
         };
+    }
+    
+    // Update the showKillNotification method with improved visuals
+    private showKillNotification(killerSessionId: string, killedSessionId: string) {
+        console.log(`showKillNotification called with killer: ${killerSessionId}, killed: ${killedSessionId}`);
+        
+        // Get player names or use session IDs if names aren't available
+        const killerName = this.getPlayerName(killerSessionId) || `Player ${killerSessionId.substr(0, 4)}`;
+        const killedName = this.getPlayerName(killedSessionId) || `Player ${killedSessionId.substr(0, 4)}`;
+        
+        console.log(`Notification text: ${killerName} eliminated ${killedName}!`);
+        
+        // Create container for the notification
+        const container = this.add.container(
+            this.cameras.main.width / 2,
+            80 + (this.killNotifications.length * 40)
+        ).setScrollFactor(0).setDepth(1000);
+        
+        // Add background with gradient
+        const bgWidth = 400;
+        const bgHeight = 50;
+        const background = this.add.graphics();
+        background.fillGradientStyle(
+            0x990000, 0x990000,  // Red gradient at top
+            0x330000, 0x330000,  // Darker red at bottom
+            1, 1, 1, 1
+        );
+        background.fillRoundedRect(-bgWidth/2, -bgHeight/2, bgWidth, bgHeight, 10);
+        background.lineStyle(2, 0xff0000, 1);
+        background.strokeRoundedRect(-bgWidth/2, -bgHeight/2, bgWidth, bgHeight, 10);
+        container.add(background);
+        
+        // Add skull icon
+        const skull = this.add.image(-bgWidth/2 + 30, 0, 'food')  // Replace with skull icon if available
+            .setTint(0xff0000)
+            .setScale(1.5);
+        container.add(skull);
+        
+        // Add text with killer name in bold - enable HTML formatting
+        const notificationText = this.add.text(
+            -bgWidth/2 + 60, 0,
+            '', // Start with empty text, we'll set it with HTML below
+            {
+                fontFamily: 'Arial',
+                fontSize: '18px',
+                color: '#ffffff',
+                stroke: '#000000',
+                strokeThickness: 3,
+                align: 'center'
+            }
+        ).setOrigin(0, 0.5);
+        
+        // Enable HTML formatting
+        notificationText.setStyle({ fontStyle: 'bold' });
+        
+        // Since HTML might not work reliably, let's use a different approach
+        // Make the killer name a different color instead of bold
+        const killText = `${killerName} eliminated ${killedName}!`;
+        notificationText.setText(killText);
+        
+        // Create a separate text object for the killer name with different styling
+        const killerText = this.add.text(
+            -bgWidth/2 + 60, 0,
+            killerName,
+            {
+                fontFamily: 'Arial',
+                fontSize: '18px',
+                color: '#ffff00', // Yellow color for emphasis
+                stroke: '#000000',
+                strokeThickness: 3,
+                fontStyle: 'bold'
+            }
+        ).setOrigin(0, 0.5);
+        
+        // Calculate the width of the killer name to position the rest of the text
+        const killerWidth = killerText.width;
+        
+        // Create the "eliminated" text
+        const eliminatedText = this.add.text(
+            -bgWidth/2 + 60 + killerWidth + 5, 0,
+            `eliminated ${killedName}!`,
+            {
+                fontFamily: 'Arial',
+                fontSize: '18px',
+                color: '#ffffff',
+                stroke: '#000000',
+                strokeThickness: 3
+            }
+        ).setOrigin(0, 0.5);
+        
+        // Remove the original text and add the new text components
+        notificationText.destroy();
+        container.add(killerText);
+        container.add(eliminatedText);
+        
+        // Add to notifications array
+        this.killNotifications.push(container);
+        
+        // Add entrance animation
+        container.setAlpha(0);
+        container.y -= 20;
+        
+        this.tweens.add({
+            targets: container,
+            y: '+=20',
+            alpha: 1,
+            duration: 300,
+            ease: 'Back.easeOut'
+        });
+        
+        // Add subtle pulse animation
+        this.tweens.add({
+            targets: skull,
+            scale: 1.8,
+            duration: 300,
+            yoyo: true,
+            repeat: 2,
+            ease: 'Sine.easeInOut'
+        });
+        
+        // Add sound effect for kill notification
+        if (this.deathSound) {
+            this.deathSound.play({ volume: 0.3 });
+        }
+        
+        // Remove notification after a few seconds
+        this.time.delayedCall(3500, () => {
+            // Exit animation
+            this.tweens.add({
+                targets: container,
+                y: '-=20',
+                alpha: 0,
+                duration: 300,
+                ease: 'Back.easeIn',
+                onComplete: () => {
+                    container.destroy();
+                    this.killNotifications = this.killNotifications.filter(n => n !== container);
+                    
+                    // Move remaining notifications up
+                    this.killNotifications.forEach((notification, index) => {
+                        this.tweens.add({
+                            targets: notification,
+                            y: 80 + (index * 40),
+                            duration: 200,
+                            ease: 'Quad.easeOut'
+                        });
+                    });
+                }
+            });
+        });
+    }
+    
+    // Update the getPlayerName helper method to handle undefined cases
+    private getPlayerName(sessionId: string): string | null {
+        if (!this.room || !this.room.state || !this.room.state.players) {
+            return null;
+        }
+        const player = this.room.state.players.get(sessionId);
+        return player && player.name ? player.name : null;
+    }
+    
+    // Add this method to check for collisions between players
+    private checkPlayerCollisions() {
+        if (!this.gameState || !this.playerId) return;
+        
+        const currentPlayer = this.gameState.players.get(this.playerId);
+        if (!currentPlayer || !currentPlayer.alive || !currentPlayer.headPosition) return;
+        
+        // Skip collision detection during invulnerability period
+        if (this.time.now < this.invulnerableUntil) {
+            return;
+        }
+        
+        const headPosition = currentPlayer.headPosition;
+        const headRadius = 8; // Reduced from 10 to 8
+        
+        // Check collisions with other players' segments using segment histories
+        this.gameState.players.forEach((otherPlayer: any) => {
+            if (otherPlayer.id === this.playerId || !otherPlayer.alive) return;
+            
+            // Get segment history for this player
+            const segmentHistory = this.playerSegmentHistories.get(otherPlayer.id);
+            if (!segmentHistory ) return;
+            
+            // Skip the head (first position in history)
+            // Start from index 1 to skip the head
+            for (let i = 1; i < segmentHistory.length; i++) {
+                const segment = segmentHistory[i];
+                
+                // Calculate distance between current player's head and other player's segment
+                const dx = headPosition.x - segment.x;
+                const dy = headPosition.y - segment.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                // Reduce the collision threshold for more precise detection
+                // Segment radius reduced from 8 to 6
+                if (distance < headRadius + 6) { 
+                    // Collision detected - send death event to server
+                    this.room.send('playerDied', { 
+                        playerId: this.playerId,
+                        killerSessionId: otherPlayer.id
+                    });
+                    
+                    // Play death sound
+                    if (this.deathSound) {
+                        this.deathSound.play();
+                    }
+                    
+                    // Show death overlay
+                    this.showDeathOverlay();
+                    
+                    // Break out of the loop
+                    return;
+                }
+            }
+        });
+        
+        // Check collision with world boundaries
+        if (headPosition.x < 0 || headPosition.x > this.worldWidth || 
+            headPosition.y < 0 || headPosition.y > this.worldHeight) {
+            // Collision with world boundary - send death event to server
+            this.room.send('playerDied', { 
+                playerId: this.playerId,
+                killerSessionId: null // No killer for boundary collisions
+            });
+            
+            // Play death sound
+            if (this.deathSound) {
+                this.deathSound.play();
+            }
+            
+            // Show death overlay
+            this.showDeathOverlay();
+        }
+    }
+    
+    // Add the respawn method to handle respawn button clicks
+    private respawn() {
+        console.log('Respawning player...');
+        
+        // Hide death overlay and buttons
+        if (this.deathOverlay) this.deathOverlay.setVisible(false);
+        if (this.respawnButton) this.respawnButton.setVisible(false);
+        if (this.menuButton) this.menuButton.setVisible(false);
+        
+        // Set invulnerability for 3 seconds
+        this.invulnerableUntil = this.time.now + 3000;
+        console.log('Player is invulnerable until:', this.invulnerableUntil);
+        
+        // Send respawn message to server
+        if (this.room) {
+            this.room.send('respawn');
+            console.log('Sent respawn message to server');
+        }
     }
 } 

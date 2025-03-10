@@ -36,13 +36,14 @@ export class SnakeSegment extends Schema {
 
 export class Player extends Schema {
     @type("string") id: string;
-    @type("string") name: string;
+    @type("string") name: string = "";
     @type("number") score: number = 0;
     @type("number") angle: number = 0;
     @type("number") speed: number = 5;
     @type("string") color: string;
     @type("boolean") alive: boolean = true;
     @type("number") skinId: number = 0;
+    @type("number") kills: number = 0;
     
     // Remove the @type decorator to prevent automatic synchronization
     segments = new ArraySchema<SnakeSegment>();

@@ -116,6 +116,38 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
             console.log(`Received message of type: ${type}`);
         });
 
+        // Add this in the onCreate method
+        this.onMessage("playerDied", (client, message) => {
+            const player = this.state.players.get(client.sessionId);
+            if (!player || !player.alive) return;
+            
+            // Kill the player
+            this.killPlayer(player);
+            
+            // If there's a killer, update their score and broadcast the kill
+            if (message.killerSessionId) {
+                const killer = this.state.players.get(message.killerSessionId);
+                if (killer) {
+                    // Add score to the killer
+                    killer.score += Math.floor(player.score / 2);
+                    
+                    // Increment kill count
+                    killer.kills += 1;
+                    
+                    // Broadcast kill event
+                    this.broadcast("playerKilled", {
+                        killed: player.id,
+                        killer: message.killerSessionId
+                    });
+                    
+                    console.log(`Broadcasting kill event: ${message.killerSessionId} killed ${player.id}`);
+                }
+            }
+            
+            // Spawn food from dead player
+            this.spawnFoodFromDeadPlayer(player);
+        });
+
         // Initialize food
         this.initializeFood();
         
@@ -187,7 +219,6 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
             if (!player.alive) return;
             
             this.movePlayer(player);
-            this.checkPlayerCollisions(player);
         });
         
         // Replenish food if needed
@@ -263,48 +294,8 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
     }
 
     private checkPlayerCollisions(player: Player) {
-        if (!player.alive) return;
-        
-        const head = player.head;
-        const headRadius = 10;
-        
-        // Check collisions with other players
-        this.state.players.forEach((otherPlayer) => {
-            if (otherPlayer.id === player.id || !otherPlayer.alive) return;
-            
-            // Skip the head of the other player (index 0)
-            for (let i = 1; i < otherPlayer.segments.length; i++) {
-                const segment = otherPlayer.segments[i];
-                const dx = head.x - segment.position.x;
-                const dy = head.y - segment.position.y;
-                const distance = Math.sqrt(dx * dx + dy * dy);
-                
-                if (distance < headRadius + 8) { // 8 is approximate segment radius
-                    this.killPlayer(player);
-                    
-                    // Add score to the player who was hit
-                    otherPlayer.score += Math.floor(player.score / 2);
-                    
-                    // Spawn food from dead player
-                    this.spawnFoodFromDeadPlayer(player);
-                    return;
-                }
-            }
-        });
-        
-        // Check self-collision (skip the first few segments)
-        for (let i = 5; i < player.segments.length; i++) {
-            const segment = player.segments[i];
-            const dx = head.x - segment.position.x;
-            const dy = head.y - segment.position.y;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            
-            if (distance < headRadius - 2) { // Slightly smaller to avoid false positives
-                this.killPlayer(player);
-                this.spawnFoodFromDeadPlayer(player);
-                return;
-            }
-        }
+        // This method is no longer used since collision detection is handled client-side
+        // Code is kept for reference
     }
 
     private killPlayer(player: Player) {
@@ -322,6 +313,7 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
         const spawnPosition = this.getRandomPosition();
         player.alive = true;
         player.score = 0;
+        player.kills = 0; // Reset kills on respawn
         player.segments.clear();
         
         // Initialize snake with 5 segments
@@ -397,5 +389,34 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
         if (value < 0) return max + (value % max);
         if (value >= max) return value % max;
         return value;
+    }
+
+    // Add this method to determine who killed the player
+    private getKillerSessionId(deadPlayerSessionId: string): string | null {
+        const deadPlayer = this.state.players.get(deadPlayerSessionId);
+        if (!deadPlayer) return null;
+        
+        const headPosition = deadPlayer.segments[0].position;
+        const collisionRadius = 10; // Same as headRadius in checkPlayerCollisions
+        
+        // Check if player collided with another player's body
+        for (const [sessionId, player] of this.state.players.entries()) {
+            if (sessionId === deadPlayerSessionId) continue;
+            
+            // Check if dead player's head collided with this player's body
+            // Skip the head (index 0) to match the collision logic in checkPlayerCollisions
+            for (let i = 1; i < player.segments.length; i++) {
+                const segment = player.segments[i];
+                const dx = headPosition.x - segment.position.x;
+                const dy = headPosition.y - segment.position.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < collisionRadius + 8) { // 8 is approximate segment radius
+                    return sessionId;
+                }
+            }
+        }
+        
+        return null;
     }
 } 
