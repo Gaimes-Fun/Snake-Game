@@ -156,18 +156,6 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
         this.gameLoopInterval = this.clock.setInterval(() => {
             this.gameLoop();
         }, this.tickRate);
-
-        this.clock.setInterval(() => {
-            const start = performance.now();
-            this.state.players.forEach(player => {
-                if (!player.alive) return;
-                
-                // Add collision detection after moving the player
-                this.checkPlayerCollisions(player);
-            });
-            const end = performance.now();
-            console.log(`Player collision check took ${end - start} milliseconds`);
-        }, 30);
     }
 
     onJoin(client: Client, options: { name: string, skinId?: number }) {
@@ -234,7 +222,8 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
             
             this.movePlayer(player);
             
-            // this.checkPlayerCollisions(player);
+            // Add collision detection after moving the player
+            this.checkPlayerCollisions(player);
         });
         
         // Replenish food if needed
