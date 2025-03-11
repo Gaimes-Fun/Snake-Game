@@ -70,7 +70,7 @@ export class GameScene extends Scene {
     // Add these properties to the class
     private segmentSpacing: number = 12; // Reduced from 20 to 12 for closer segments
     private playerSegmentHistories: Map<string, Array<{x: number, y: number}>> = new Map(); // Store histories for all players
-    private historySize: number = 100; // Maximum history size
+    private historySize: number = 500; // Maximum history size
     
     // Add this new property
     private killNotifications: Phaser.GameObjects.Container[] = [];
@@ -80,7 +80,7 @@ export class GameScene extends Scene {
     
     // Add this property to the class
     private lastAngle: number = 0;
-    private maxAngleChange: number = 10; // Maximum angle change per frame (in degrees)
+    private maxAngleChange: number = 7; // Increased from 10 to 20 degrees per frame
     
     // Add this property to the GameScene class
     private invulnerableUntil: number = 0;
@@ -206,9 +206,12 @@ export class GameScene extends Scene {
                 if (angleDiff < -180) angleDiff += 360;
                 
                 // Limit the angle change to maxAngleChange
-                if (Math.abs(angleDiff) > this.maxAngleChange) {
+                // Reduce the limiting effect when the player is boosting for more responsive turns
+                const effectiveMaxAngleChange = player.boosting ? this.maxAngleChange * 1.5 : this.maxAngleChange;
+                
+                if (Math.abs(angleDiff) > effectiveMaxAngleChange) {
                     const sign = Math.sign(angleDiff);
-                    angleDeg = this.lastAngle + (sign * this.maxAngleChange);
+                    angleDeg = this.lastAngle + (sign * effectiveMaxAngleChange);
                 }
             }
             
@@ -238,10 +241,7 @@ export class GameScene extends Scene {
         
         this.updateCamera();
         
-        // Check for collisions
-        this.checkPlayerCollisions();
-        
-        // Add visual effect for invulnerability
+        // Remove the checkPlayerCollisions() call and keep only the visual effect for invulnerability
         if (time < this.invulnerableUntil) {
             const player = this.gameState.players.get(this.playerId);
             if (player && player.alive) {
@@ -1539,16 +1539,19 @@ export class GameScene extends Scene {
         }
     }
     
-    destroy(fromScene?: boolean) {
+    shutdown() {
         // Stop background music when leaving the scene
         if (this.backgroundMusic) {
             this.backgroundMusic.stop();
         }
         
-        // Call the parent destroy method - using Scene's proper method
-        if (fromScene) {
-            super.destroy();
+        // Clean up resources
+        if (this.room) {
+            this.room.removeAllListeners();
         }
+        
+        // Call the parent shutdown method
+        super.shutdown();
     }
     
     // Update the attractFoodInFront method to handle glow cleanup when food is eaten
@@ -1935,77 +1938,7 @@ export class GameScene extends Scene {
     
     // Add this method to check for collisions between players
     private checkPlayerCollisions() {
-        if (!this.gameState || !this.playerId) return;
-        
-        const currentPlayer = this.gameState.players.get(this.playerId);
-        if (!currentPlayer || !currentPlayer.alive || !currentPlayer.headPosition) return;
-        
-        // Skip collision detection during invulnerability period
-        if (this.time.now < this.invulnerableUntil) {
-            return;
-        }
-        
-        const headPosition = currentPlayer.headPosition;
-        const headRadius = 8; // Reduced from 10 to 8
-        
-        // Check collisions with other players' segments using segment histories
-        this.gameState.players.forEach((otherPlayer: any) => {
-            if (otherPlayer.id === this.playerId || !otherPlayer.alive) return;
-            
-            // Get segment history for this player
-            const segmentHistory = this.playerSegmentHistories.get(otherPlayer.id);
-            if (!segmentHistory ) return;
-            
-            // Skip the head (first position in history)
-            // Start from index 1 to skip the head
-            for (let i = 1; i < segmentHistory.length; i++) {
-                const segment = segmentHistory[i];
-                
-                // Calculate distance between current player's head and other player's segment
-                const dx = headPosition.x - segment.x;
-                const dy = headPosition.y - segment.y;
-                const distance = Math.sqrt(dx * dx + dy * dy);
-                
-                // Reduce the collision threshold for more precise detection
-                // Segment radius reduced from 8 to 6
-                if (distance < headRadius + 6) { 
-                    // Collision detected - send death event to server
-                    this.room.send('playerDied', { 
-                        playerId: this.playerId,
-                        killerSessionId: otherPlayer.id
-                    });
-                    
-                    // Play death sound
-                    if (this.deathSound) {
-                        this.deathSound.play();
-                    }
-                    
-                    // Show death overlay
-                    this.showDeathOverlay();
-                    
-                    // Break out of the loop
-                    return;
-                }
-            }
-        });
-        
-        // Check collision with world boundaries
-        if (headPosition.x < 0 || headPosition.x > this.worldWidth || 
-            headPosition.y < 0 || headPosition.y > this.worldHeight) {
-            // Collision with world boundary - send death event to server
-            this.room.send('playerDied', { 
-                playerId: this.playerId,
-                killerSessionId: null // No killer for boundary collisions
-            });
-            
-            // Play death sound
-            if (this.deathSound) {
-                this.deathSound.play();
-            }
-            
-            // Show death overlay
-            this.showDeathOverlay();
-        }
+        // ... entire method to be removed ...
     }
     
     // Add the respawn method to handle respawn button clicks

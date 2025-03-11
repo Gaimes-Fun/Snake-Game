@@ -25,6 +25,7 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
     onCreate(options: any) {
         this.setState(new SnakeGameState());
         this.state.tickRate = this.tickRate;
+        this.state.worldBoundaryCollisions = true;
         
         // Set up message handlers
         this.onMessage("move", (client, message: { angle: number }) => {
@@ -219,6 +220,9 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
             if (!player.alive) return;
             
             this.movePlayer(player);
+            
+            // Add collision detection after moving the player
+            this.checkPlayerCollisions(player);
         });
         
         // Replenish food if needed
@@ -294,8 +298,72 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
     }
 
     private checkPlayerCollisions(player: Player) {
-        // This method is no longer used since collision detection is handled client-side
-        // Code is kept for reference
+        if (!player.alive) return;
+        
+        // Get the head position
+        const head = player.segments[0];
+        if (!head) return;
+        
+        // Check for collisions with other players
+        this.state.players.forEach((otherPlayer, otherPlayerId) => {
+            if (otherPlayerId === player.id || !otherPlayer.alive) return;
+            
+            // Skip collision check if player is invulnerable
+            if (player.invulnerable) return;
+            
+            // Skip the head (first segment) of the other player
+            for (let i = 1; i < otherPlayer.segments.length; i++) {
+                const segment = otherPlayer.segments[i];
+                
+                // Calculate distance between player's head and other player's segment
+                const dx = head.position.x - segment.position.x;
+                const dy = head.position.y - segment.position.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                // Collision detected
+                const headRadius = 8;
+                const segmentRadius = 6;
+                
+                if (distance < headRadius + segmentRadius) {
+                    // Kill the player
+                    this.killPlayer(player);
+                    
+                    // Update killer's score and stats
+                    otherPlayer.score += Math.floor(player.score / 2);
+                    otherPlayer.kills += 1;
+                    
+                    // Broadcast kill event
+                    this.broadcast("playerKilled", {
+                        killed: player.id,
+                        killer: otherPlayer.id
+                    });
+                    
+                    // Spawn food from dead player
+                    this.spawnFoodFromDeadPlayer(player);
+                    
+                    return; // Exit after collision is detected
+                }
+            }
+        });
+        
+        // Check collision with world boundaries
+        if (this.state.worldBoundaryCollisions) {
+            if (head.position.x < 0 || head.position.x > this.state.worldWidth ||
+                head.position.y < 0 || head.position.y > this.state.worldHeight) {
+                
+                // Kill the player
+                this.killPlayer(player);
+                
+                // Broadcast death without a killer
+                this.broadcast("playerDied", { 
+                    playerId: player.id,
+                    killerSessionId: null
+                });
+                
+                // Spawn food from dead player
+                this.spawnFoodFromDeadPlayer(player);
+            }
+        }
     }
 
     private killPlayer(player: Player) {
@@ -315,6 +383,16 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
         player.score = 0;
         player.kills = 0; // Reset kills on respawn
         player.segments.clear();
+        
+        // Set player as invulnerable for 3 seconds
+        player.invulnerable = true;
+        
+        // Schedule invulnerability to end after 3 seconds
+        this.clock.setTimeout(() => {
+            if (player) {
+                player.invulnerable = false;
+            }
+        }, 3000);
         
         // Initialize snake with 5 segments
         const initialSegments = 5;

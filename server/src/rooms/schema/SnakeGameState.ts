@@ -44,6 +44,7 @@ export class Player extends Schema {
     @type("boolean") alive: boolean = true;
     @type("number") skinId: number = 0;
     @type("number") kills: number = 0;
+    @type("boolean") invulnerable: boolean = false;
     
     // Remove the @type decorator to prevent automatic synchronization
     segments = new ArraySchema<SnakeSegment>();
@@ -102,6 +103,7 @@ export class SnakeGameState extends Schema {
     @type("number") worldHeight: number = 8000;
     @type("number") maxFoods: number = 1000; 
     @type("number") tickRate: number = 16; // ms per tick
+    @type("boolean") worldBoundaryCollisions: boolean = true;
     
     // Add a timestamp for client-side interpolation
     @type("number") timestamp: number = 0;
