@@ -2,7 +2,7 @@ import { Room, Client, Delayed } from "@colyseus/core";
 import { SnakeGameState, Player, Food, Vector2, SnakeSegment } from "./schema/SnakeGameState";
 
 export class SnakeGameRoom extends Room<SnakeGameState> {
-    maxClients = 50;
+    maxClients = 20;
     tickRate = 16; // Changed from 20 to 16 ms (approximately 60 FPS)
     gameLoopInterval: Delayed;
     
@@ -215,6 +215,7 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
     }
 
     private gameLoop() {
+        const start = performance.now();
         // Update all players
         this.state.players.forEach(player => {
             if (!player.alive) return;
@@ -229,6 +230,8 @@ export class SnakeGameRoom extends Room<SnakeGameState> {
         if (this.state.foods.size < this.state.maxFoods) {
             this.spawnFood();
         }
+        const end = performance.now();
+        console.log(`Game loop took ${end - start} milliseconds`);
     }
 
     private movePlayer(player: Player) {
